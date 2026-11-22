@@ -42,7 +42,7 @@
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v0.3.0',
+  version: 'v0.4.0',
   phasesAvailable: 1,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
   render: { maxDpr: 2, maxBgRes: 3 },
@@ -80,6 +80,14 @@ const CONFIG = {
   ally: { thankTime: 1.6, runSpeed: 170 },
   combo: { window: 2.5, tiers: [[30, 5], [20, 4], [10, 3], [5, 2]] },
   extraLives: 3,
+  mech: {
+    w: 28, h: 50, armor: 30, speed: 115, accel: 1100, friction: 1400, airAccel: 700, jumpVel: 430, jumpCut: 0.5,
+    fireRate: 0.085, bulletSpeed: 620, bulletDmg: 1, spreadJ: 0.04,
+    missiles: 8, missileRecharge: 3.0, missileRate: 0.3, missileSpeed: 380, missileTurn: 6, missileDmg: 4, missileRadius: 36, missileLife: 2.6,
+    chargeTime: 0.28, chargeSpeed: 330, chargeDmg: 4,
+    hitInvuln: 0.3, dyingTime: 1.0, ejectInvuln: 1.5, ejectVy: -480, exitVy: -360, enterTime: 0.4, reenterCd: 0.9,
+    stepShake: 1.4, repair: 8
+  },
   enemies: {
     soldier: { w: 18, h: 32, hp: 3, speed: 38, range: 330, fireRate: 1.7, telegraph: 0.35, bulletSpeed: 185, bulletLife: 3, maxAimDeg: 35, keepDist: 90, contactDmg: 1, score: 100 },
     runner:  { w: 18, h: 26, hp: 2, speed: 150, triggerDist: 300, windup: 0.35, chargeTime: 1.6, recover: 0.6, contactDmg: 1, score: 150 },
@@ -198,7 +206,7 @@ const Audio = {
   play(name) {
     if (!this.ctx) return;
     const now = performance.now();
-    const minGap = { shoot: 45, eshot: 60, hit: 35, step: 90, flame: 70, spread: 60, laser: 60, bounce: 50 }[name] || 0;
+    const minGap = { mg: 70, step: 120, metal: 60, shoot: 45, eshot: 60, hit: 35, step: 90, flame: 70, spread: 60, laser: 60, bounce: 50 }[name] || 0;
     if (minGap && this.last[name] && now - this.last[name] < minGap) return;
     this.last[name] = now;
     switch (name) {
@@ -231,6 +239,12 @@ const Audio = {
       case 'select': this.tone('triangle', 520, 520, 0.05, 0.06); break;
       case 'gameover': this.tone('sawtooth', 330, 320, 0.3, 0.08); this.tone('sawtooth', 262, 250, 0.3, 0.08, 0.3); this.tone('sawtooth', 196, 120, 0.7, 0.09, 0.6); break;
       case 'victory': [523, 659, 784, 1047].forEach((f, i) => this.tone('square', f, f, 0.16, 0.07, i * 0.13)); this.tone('triangle', 1047, 1047, 0.5, 0.08, 0.55); break;
+      case 'mg': this.tone('square', 220, 90, 0.06, 0.09); this.noise(0.05, 0.1, 'bandpass', 1500, 500); break;
+      case 'step': this.tone('sine', 70, 40, 0.12, 0.18); this.noise(0.08, 0.08, 'lowpass', 400, 80); break;
+      case 'metal': this.tone('square', 520, 260, 0.08, 0.07); this.noise(0.06, 0.1, 'highpass', 3000, 2000); break;
+      case 'missile': this.noise(0.4, 0.12, 'bandpass', 900, 2800); this.tone('sawtooth', 200, 500, 0.25, 0.04); break;
+      case 'mechOn': this.tone('sawtooth', 110, 330, 0.3, 0.07); this.tone('square', 660, 990, 0.15, 0.06, 0.3); break;
+      case 'mechOff': this.tone('sawtooth', 330, 110, 0.25, 0.06); break;
       case 'death': this.tone('sawtooth', 500, 40, 0.9, 0.12); this.noise(0.8, 0.25, 'lowpass', 3000, 60); break;
     }
   }
@@ -620,11 +634,12 @@ const Player = {
       maxHp: Game.diff.hp, hp: Game.diff.hp, invuln: 0, dashT: 0, dashInv: 0, dashCd: 0, dashDir: 1, dashAir: false,
       coyote: 0, jumpBuf: 0, jumpCutDone: true, crouch: false, aimA: 0, fireCd: 0, muzzle: 0,
       runPhase: 0, drop: 0, ghostT: 0, dead: false, weapon: 'pulse', ammo: Infinity,
-      bombs: CONFIG.bombs.start, bombCd: 0, knifeCd: 0, knifeT: 0, mech: null
+      bombs: CONFIG.bombs.start, bombCd: 0, knifeCd: 0, knifeT: 0, mech: null, enterCd: 0
     });
   },
   hurt(dmg, srcX) {
     if (this.dead || this.invuln > 0 || this.dashInv > 0) return false;
+    if (this.mech) return this.hurtMech(dmg, srcX);
     this.hp -= dmg;
     this.invuln = CONFIG.player.invuln;
     Game.breakCombo();
@@ -639,6 +654,8 @@ const Player = {
   update(dt) {
     const C = CONFIG.player, I = Input.held, P = Input.pressed;
     if (this.dead) return;
+    if (this.mech) { this.updateMech(dt); return; }
+    this.enterCd = Math.max(0, this.enterCd - dt);
     this.invuln = Math.max(0, this.invuln - dt);
     this.dashInv = Math.max(0, this.dashInv - dt);
     this.dashCd = Math.max(0, this.dashCd - dt);
@@ -731,7 +748,194 @@ const Player = {
     }
     // ---- Bomba
     if (P.bomb && this.dashT <= 0) this.throwBomb();
+    // ---- Entrar no mecha (encostar)
+    for (const u of MechUnits.list) {
+      const touching = Util.overlap(this, u);
+      if (u.blocked) { if (Math.abs(this.x - u.x) > (this.w + u.w) / 2 + 4) u.blocked = false; continue; }   // precisa se afastar após sair
+      if (this.enterCd <= 0 && u.onGround && touching) { this.enterMech(u); break; }
+    }
   },
+  // ======================= MECHA BION-WALKER (pilotado) =======================
+  enterMech(u) {
+    const C = CONFIG.mech;
+    this.mech = { armor: u.armor, maxArmor: C.armor, missiles: u.missiles, rechargeT: 0, missileCd: 0, flash: 0, dying: 0, entering: C.enterTime, hitList: [] };
+    MechUnits.list = MechUnits.list.filter(m => m !== u);
+    this.x = u.x; this.y = u.y; this.vx = 0; this.vy = 0;
+    this.w = C.w; this.h = C.h; this.crouch = false; this.dashT = 0; this.knifeT = 0; this.aimA = 0;
+    this.invuln = 0;
+    Pools.particle({ x: this.x, y: this.y - 30, vx: 0, vy: 0, life: 0.35, color: '#55ff9a', size: 8, kind: 'ring', grow: 120 });
+    Game.showBanner('BION-WALKER', 'BAIXO + PULO para sair', '#55ff9a');
+    Audio.play('mechOn');
+  },
+  leaveMechBody(vy) {
+    const P = CONFIG.player;
+    this.mech = null;
+    this.w = P.w; this.h = P.h;
+    this.vy = vy; this.dashT = 0; this.dashInv = 0;
+    this.enterCd = CONFIG.mech.reenterCd;
+    this.onGround = false;
+  },
+  exitMech() {
+    const m = this.mech;
+    MechUnits.create(this.x, this.y, m.armor, m.missiles, this.facing, true);
+    this.y -= 20;
+    this.leaveMechBody(CONFIG.mech.exitVy);
+    this.invuln = 0.4;
+    Audio.play('mechOff');
+  },
+  ejectDestroyed() {
+    const C = CONFIG.mech, cx = this.x, cy = this.y - 25;
+    FX.explosion(cx, cy, 2); FX.explosion(cx + 10, cy - 10, 1.2);
+    Game.addShake(8, 0.4);
+    Game.hitStop = Math.max(Game.hitStop, CONFIG.fx.hitStop);
+    Audio.play('bigexplode');
+    const r = 52;
+    for (const e of Enemies.list) if (!e.dead && Math.abs(e.x - cx) < r + e.w / 2 && Math.abs((e.y - e.h / 2) - cy) < r) Enemies.damage(e, 6, true);
+    for (let i = 0; i < 10; i++) Pools.particle({ x: cx + Util.rand(-14, 14), y: cy + Util.rand(-14, 14), vx: Util.rand(-160, 160), vy: Util.rand(-260, -60), life: 0.8, color: '#9fb2c2', size: 2.5, kind: 'dot', add: false, grav: 600 });
+    this.y -= 30;
+    this.leaveMechBody(C.ejectVy);
+    this.invuln = C.ejectInvuln;
+    Game.showBanner('MECHA DESTRUÍDO', 'KAI-4 ejetado', '#ffb02e');
+  },
+  hurtMech(dmg, srcX) {
+    const m = this.mech, C = CONFIG.mech;
+    if (m.dying > 0 || m.entering > 0) return false;
+    m.armor -= dmg; m.flash = 0.08;
+    this.invuln = C.hitInvuln;
+    Game.breakCombo();
+    Game.addShake(3, 0.12);
+    FX.sparks(this.x, this.y - 30, 8, '#ffd27a', 160);
+    Audio.play('metal');
+    if (m.armor <= 0) { m.armor = 0; m.dying = C.dyingTime; Audio.play('warn'); }
+    return true;
+  },
+  mechShoulder() { return { x: this.x + this.facing * 10, y: this.y - 34 }; },
+  updateMech(dt) {
+    const C = CONFIG.mech, I = Input.held, P = Input.pressed, m = this.mech;
+    this.invuln = Math.max(0, this.invuln - dt);
+    this.dashInv = Math.max(0, this.dashInv - dt);
+    this.dashCd = Math.max(0, this.dashCd - dt);
+    this.fireCd = Math.max(0, this.fireCd - dt);
+    this.muzzle = Math.max(0, this.muzzle - dt);
+    this.jumpBuf = Math.max(0, this.jumpBuf - dt);
+    this.coyote = Math.max(0, this.coyote - dt);
+    this.drop = Math.max(0, this.drop - dt);
+    m.flash = Math.max(0, m.flash - dt);
+    m.missileCd = Math.max(0, m.missileCd - dt);
+    if (m.missiles < C.missiles) { m.rechargeT += dt; if (m.rechargeT >= C.missileRecharge) { m.rechargeT = 0; m.missiles++; } }
+
+    // destruição: pisca 1 s e explode
+    if (m.dying > 0) {
+      m.dying -= dt;
+      this.vx = Util.approach(this.vx, 0, 900 * dt);
+      Physics.move(this, dt);
+      if (Math.random() < 0.4) FX.sparks(this.x + Util.rand(-12, 12), this.y - Util.rand(10, 45), 2, '#ffb02e', 120);
+      if (m.dying <= 0) this.ejectDestroyed();
+      return;
+    }
+    if (m.entering > 0) { m.entering -= dt; this.vx = 0; Physics.move(this, dt); return; }
+
+    // sair: BAIXO + PULO
+    if (I.down && P.jump) { this.exitMech(); return; }
+
+    // investida (DASH)
+    if (P.dash && this.dashCd <= 0 && this.dashT <= 0) {
+      this.dashDir = I.left ? -1 : (I.right ? 1 : this.facing);
+      this.facing = this.dashDir;
+      this.dashT = C.chargeTime; this.dashInv = C.chargeTime; this.dashCd = CONFIG.player.dashCooldown;
+      m.hitList = [];
+      Audio.play('dash'); Game.addShake(3, 0.15);
+    }
+    if (this.dashT > 0) {
+      this.dashT -= dt;
+      this.vx = this.dashDir * C.chargeSpeed;
+      if (Math.random() < 0.6) Pools.particle({ x: this.x - this.facing * 14, y: this.y - Util.rand(5, 40), vx: -this.facing * 120, vy: 0, life: 0.2, color: '#55ff9a', size: 2, kind: 'spark' });
+      const box = { x: this.x + this.facing * (this.w / 2 + 10), y: this.y, w: 26, h: this.h };
+      const hit = (o, fn) => {
+        if (m.hitList.includes(o) || !Util.overlap(box, o)) return;
+        m.hitList.push(o); fn();
+        FX.sparks(o.x, o.y - o.h / 2, 10, '#bfffe0', 200, this.facing * 150, 0);
+        Game.hitStop = Math.max(Game.hitStop, CONFIG.fx.hitStop); Game.addShake(4, 0.12);
+      };
+      for (const e of Enemies.list) if (!e.dead) hit(e, () => { Enemies.damage(e, C.chargeDmg, true); e.vx = this.facing * 200; e.vy = -180; });
+      for (const pr of Props.list) if (pr.alive) hit(pr, () => Props.damage(pr, C.chargeDmg));
+      if (Boss.active && !Boss.dying) hit(Boss, () => Boss.damage(C.chargeDmg));
+      if (this.dashT <= 0) this.vx = this.dashDir * C.speed * 0.5;
+    } else {
+      const dir = (I.right ? 1 : 0) - (I.left ? 1 : 0);
+      const acc = this.onGround ? (dir ? C.accel : C.friction) : C.airAccel;
+      this.vx = Util.approach(this.vx, dir * C.speed, acc * dt);
+      if (dir) this.facing = dir;
+    }
+
+    // pulo pesado
+    if (this.onGround) this.coyote = CONFIG.player.coyote;
+    if (P.jump && !I.down) this.jumpBuf = CONFIG.player.jumpBuffer;
+    if (this.jumpBuf > 0 && this.coyote > 0 && this.dashT <= 0) {
+      this.vy = -C.jumpVel; this.jumpCutDone = false; this.onGround = false;
+      this.jumpBuf = 0; this.coyote = 0;
+      Audio.play('jump'); FX.dust(this.x, this.y, 6);
+    }
+    if (!I.jump && !this.jumpCutDone && this.vy < 0) { this.vy *= C.jumpCut; this.jumpCutDone = true; }
+    if (this.vy >= 0) this.jumpCutDone = true;
+
+    const vyBefore = this.vy;
+    Physics.move(this, dt);
+    if (this.justLanded && vyBefore > 200) { Game.addShake(3.5, 0.15); Audio.play('heavy'); FX.dust(this.x - 10, this.y, 5); FX.dust(this.x + 10, this.y, 5); }
+
+    const minX = Game.camX + this.w / 2 + 2, maxX = Level.length - 10;
+    if (this.x < minX) { this.x = minX; if (this.vx < 0) this.vx = 0; }
+    if (this.x > maxX) this.x = maxX;
+
+    // passos que tremem a tela
+    if (this.onGround && Math.abs(this.vx) > 10) {
+      const prev = this.runPhase;
+      this.runPhase += dt * Math.abs(this.vx) * 0.07;
+      if (Math.floor(prev / Math.PI) !== Math.floor(this.runPhase / Math.PI)) {
+        Game.addShake(C.stepShake, 0.08); Audio.play('step'); FX.dust(this.x + this.facing * 6, this.y, 2);
+      }
+    }
+
+    // mira
+    let a = 0;
+    if (I.up) a = (I.left || I.right) ? -Math.PI / 4 : -Math.PI / 2;
+    else if (I.down && !this.onGround) a = Math.PI / 2;
+    this.aimA = a;
+
+    // metralhadora pesada dupla
+    if (I.fire && this.fireCd <= 0 && this.dashT <= 0) {
+      this.fireCd = C.fireRate;
+      const s = this.mechShoulder(), f = this.facing;
+      const ang = a + Util.rand(-C.spreadJ, C.spreadJ);
+      const dx = Math.cos(ang) * f, dy = Math.sin(ang);
+      const nx = -dy, ny = dx; // normal p/ canos lado a lado
+      for (const o of [-3, 3]) {
+        const mx = s.x + dx * 26 + nx * o, my = s.y + dy * 26 + ny * o * f;
+        Pools.bullet({ x: mx, y: my, vx: dx * C.bulletSpeed, vy: dy * C.bulletSpeed, life: 1.1, owner: 'p', kind: 'mg', dmg: C.bulletDmg, r: 3, pierce: false });
+      }
+      Pools.particle({ x: s.x + dx * 28, y: s.y + dy * 28, vx: 0, vy: 0, life: 0.06, color: '#fff0b0', size: 10, kind: 'flash' });
+      Pools.particle({ x: s.x - f * 4, y: s.y, vx: -f * Util.rand(40, 90), vy: Util.rand(-160, -90), life: 0.5, color: '#ffcf4a', size: 1.5, kind: 'dot', grav: 700 });
+      this.muzzle = 0.05;
+      Audio.play('mg');
+    }
+    // mísseis
+    if (P.bomb) {
+      if (m.missiles > 0 && m.missileCd <= 0) {
+        m.missiles--; m.missileCd = C.missileRate;
+        Missiles.spawn(this.x - this.facing * 14, this.y - 48, this.facing);
+        Audio.play('missile');
+      } else if (m.missiles <= 0) Audio.play('empty');
+    }
+  },
+  drawMechSelf(t) {
+    const m = this.mech;
+    MechUnits.drawWalker(this.x, this.y, this.facing, {
+      t, aimA: this.aimA, runPhase: this.runPhase, onGround: this.onGround, moving: Math.abs(this.vx) > 10,
+      pilot: true, flash: m.flash > 0 || (m.dying > 0 && Math.floor(t * 16) % 2 === 0), dying: m.dying > 0,
+      missiles: m.missiles, muzzle: this.muzzle > 0, charging: this.dashT > 0, entering: m.entering
+    });
+  },
+
   setWeapon(w) {
     this.weapon = w;
     this.ammo = CONFIG.weapons[w].ammo;
@@ -812,6 +1016,7 @@ const Player = {
   },
   draw(t) {
     if (this.dead) return;
+    if (this.mech) { this.drawMechSelf(t); return; }
     if (this.invuln > 0 && Math.floor(t * 18) % 2 === 0) ctx.globalAlpha = 0.3;
     const off = this.crouch ? 8 : 0;
     ctx.save();
@@ -1200,6 +1405,12 @@ const Bullets = {
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
         ctx.strokeStyle = '#e8ffff'; ctx.lineWidth = 2.2;
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
+      } else if (b.kind === 'mg') {
+        const tx = b.x - b.vx * 0.02, ty = b.y - b.vy * 0.02;
+        ctx.strokeStyle = 'rgba(255,190,60,0.4)'; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.strokeStyle = '#fff4c8'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
       } else if (b.kind === 'spread') {
         ctx.fillStyle = 'rgba(255,170,40,0.35)'; ctx.beginPath(); ctx.arc(b.x, b.y, 6.5, 0, 6.28); ctx.fill();
         ctx.fillStyle = '#ffe2a0'; ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, 6.28); ctx.fill();
@@ -1376,7 +1587,9 @@ const Items = {
     } else if (it.type === 'bombs') {
       P.bombs = Math.min(CONFIG.bombs.max, P.bombs + C.bombs); text = 'BOMBAS +' + C.bombs; Audio.play('pickup');
     } else if (it.type === 'repair') {
-      P.hp = Math.min(P.maxHp, P.hp + C.repair); text = 'REPARO +' + C.repair; Audio.play('pickup');
+      if (P.mech) { P.mech.armor = Math.min(P.mech.maxArmor, P.mech.armor + CONFIG.mech.repair); text = 'BLINDAGEM +' + CONFIG.mech.repair; }
+      else { P.hp = Math.min(P.maxHp, P.hp + C.repair); text = 'REPARO +' + C.repair; }
+      Audio.play('pickup');
     }
     Game.showBanner(text, sub, color);
     Game.addScore(100, it.x, it.y - 16);
@@ -1715,6 +1928,167 @@ const Boss = {
   }
 };
 
+/* ============================ Mecha BION-WALKER (estacionado + desenho) ============================ */
+const MechUnits = {
+  list: [],
+  create(x, y, armor, missiles, facing, blocked) {
+    const C = CONFIG.mech;
+    this.list.push({ x, y, vx: 0, vy: 0, w: C.w, h: C.h, armor: armor ?? C.armor, missiles: missiles ?? C.missiles, facing: facing || 1, onGround: false, t: 0, blocked: !!blocked });
+  },
+  update(dt) {
+    for (const u of this.list) {
+      u.t += dt; u.vx = 0;
+      Physics.move(u, dt);
+      if (u.missiles < CONFIG.mech.missiles) { u.rt = (u.rt || 0) + dt; if (u.rt >= CONFIG.mech.missileRecharge) { u.rt = 0; u.missiles++; } }
+    }
+    this.list = this.list.filter(u => u.x > Game.camX - 120 && u.y < CONFIG.world.height + 60);
+  },
+  draw(t) {
+    for (const u of this.list) {
+      this.drawWalker(u.x, u.y, u.facing, { t, aimA: 0.35, runPhase: 0, onGround: true, moving: false, pilot: false, missiles: u.missiles });
+      // indicador de entrada
+      const by = u.y - 66 + Math.sin(t * 5) * 2.5;
+      ctx.textAlign = 'center'; ctx.font = 'bold 8px monospace';
+      ctx.fillStyle = '#000'; ctx.fillText('ENTRAR', u.x + 1, by - 5);
+      ctx.fillStyle = '#55ff9a'; ctx.fillText('ENTRAR', u.x, by - 6);
+      ctx.beginPath(); ctx.moveTo(u.x - 5, by); ctx.lineTo(u.x + 5, by); ctx.lineTo(u.x, by + 6); ctx.fill();
+      // armadura restante
+      ctx.fillStyle = '#152430'; ctx.fillRect(u.x - 15, u.y - 58, 30, 3);
+      ctx.fillStyle = '#ffb02e'; ctx.fillRect(u.x - 15, u.y - 58, 30 * (u.armor / CONFIG.mech.armor), 3);
+    }
+  },
+  // desenho do walker (origem nos pés)
+  drawWalker(x, y, facing, o) {
+    const t = o.t, fl = o.flash;
+    const white = fl ? '#ffffff' : '#dfe8ee', shade = fl ? '#ffffff' : '#9fb2c2', dark = fl ? '#ffffff' : '#2a3542', mid = fl ? '#fff' : '#566a7c';
+    ctx.save();
+    ctx.translate(x + (o.dying ? Util.rand(-1.5, 1.5) : 0), y);
+    ctx.scale(facing, 1);
+    const sq = o.entering > 0 ? Math.sin((1 - o.entering / CONFIG.mech.enterTime) * Math.PI) * 4 : 0;
+    // pernas (digitígradas)
+    const leg = (hx, ph, col) => {
+      const lift = o.moving && o.onGround ? Math.max(0, Math.sin(o.runPhase + ph)) * 5 : (o.onGround ? 0 : 3);
+      const sw = o.moving ? Math.cos(o.runPhase + ph) * 7 : 0;
+      const hy = -24 + sq;
+      const kx = hx + 7 + sw * 0.4, ky = -15 - lift * 0.5 + sq * 0.5;
+      const ax = hx - 3 + sw, ay = -5 - lift;
+      ctx.strokeStyle = col; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(ax, ay); ctx.stroke();
+      ctx.fillStyle = shade; ctx.beginPath(); ctx.arc(kx, ky, 3, 0, 6.28); ctx.fill();
+      ctx.fillStyle = dark; Util.rr(ctx, ax - 7, ay + 1, 15, 4, 1.5); ctx.fill();
+    };
+    leg(-5, Math.PI, mid);
+    // casulo de mísseis nas costas
+    ctx.fillStyle = dark; Util.rr(ctx, -24, -52 + sq, 10, 18, 2); ctx.fill();
+    for (let i = 0; i < 8; i++) {
+      const on = i < (o.missiles ?? 0);
+      ctx.fillStyle = on ? '#55ff9a' : '#1a242e';
+      ctx.fillRect(-22.5 + (i % 2) * 4, -50 + sq + Math.floor(i / 2) * 4, 2.5, 2.5);
+    }
+    // casco
+    ctx.fillStyle = white; Util.rr(ctx, -16, -47 + sq, 32, 24, 6); ctx.fill();
+    ctx.fillStyle = shade; ctx.fillRect(-16, -30 + sq, 32, 5);
+    ctx.fillStyle = '#55ff9a'; ctx.fillRect(-13, -36 + sq, 14, 2);
+    ctx.fillStyle = dark; ctx.font = 'bold 5px monospace'; ctx.textAlign = 'left'; ctx.fillText('BW-01', -13, -39 + sq);
+    // cabine de vidro
+    ctx.fillStyle = 'rgba(20,40,55,0.9)'; ctx.beginPath(); ctx.arc(4, -47 + sq, 9, Math.PI, 0); ctx.fill();
+    if (o.pilot) {
+      ctx.fillStyle = '#eef4f8'; Util.rr(ctx, 0, -54 + sq, 9, 7, 2.5); ctx.fill();
+      ctx.fillStyle = '#3ff6ff'; ctx.fillRect(4.5, -52 + sq, 4, 1.8);
+    }
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = o.pilot ? 'rgba(63,246,255,0.22)' : 'rgba(63,246,255,0.08)';
+    ctx.beginPath(); ctx.arc(4, -47 + sq, 9, Math.PI, 0); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.strokeStyle = shade; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(4, -47 + sq, 9, Math.PI, 0); ctx.stroke();
+    // perna da frente
+    leg(6, 0, white);
+    // braço com metralhadora dupla
+    ctx.save(); ctx.translate(10, -34 + sq); ctx.rotate(o.aimA || 0);
+    ctx.fillStyle = shade; Util.rr(ctx, -5, -7, 13, 14, 3); ctx.fill();
+    ctx.fillStyle = dark; ctx.fillRect(6, -5, 20, 3.5); ctx.fillRect(6, 1.5, 20, 3.5);
+    ctx.fillStyle = '#ffb02e'; ctx.fillRect(23, -5, 3, 3.5); ctx.fillRect(23, 1.5, 3, 3.5);
+    if (o.muzzle) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = 'rgba(255,230,140,0.9)';
+      ctx.beginPath(); ctx.moveTo(26, -7); ctx.lineTo(36 + Math.random() * 5, 0); ctx.lineTo(26, 7); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.restore();
+    // escudo de investida
+    if (o.charging) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = 'rgba(85,255,154,0.8)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(10, -26, 24, -1.1, 1.1); ctx.stroke();
+      ctx.fillStyle = 'rgba(85,255,154,0.15)'; ctx.beginPath(); ctx.arc(10, -26, 24, -1.1, 1.1); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    if (o.dying) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(255,60,40,${0.25 + 0.25 * Math.sin(t * 30)})`; Util.rr(ctx, -18, -50, 36, 30, 6); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.restore();
+  }
+};
+
+/* ============================ Mísseis teleguiados do mecha ============================ */
+const Missiles = {
+  list: [],
+  spawn(x, y, dir) { this.list.push({ x, y, ang: dir > 0 ? -1.2 : -Math.PI + 1.2, speed: 160, t: 0, dir, w: 6, h: 6 }); },
+  findTarget(m) {
+    let best = null, bd = 420;
+    const L = Game.camX - 10, R = Game.camX + View.viewW + 10;
+    const consider = (o) => { if (o.x < L || o.x > R) return; const d = Math.hypot(o.x - m.x, (o.y - o.h / 2) - m.y); if (d < bd) { bd = d; best = o; } };
+    for (const e of Enemies.list) if (!e.dead) consider(e);
+    if (Boss.active && !Boss.dying) consider(Boss);
+    return best;
+  },
+  explode(m) {
+    const C = CONFIG.mech;
+    m.done = true;
+    FX.explosion(m.x, m.y, 0.9); Audio.play('explode'); Game.addShake(3, 0.12);
+    const r = C.missileRadius;
+    const inR = o => { const dx = Math.max(Math.abs(o.x - m.x) - o.w / 2, 0), dy = Math.max(Math.abs((o.y - o.h / 2) - m.y) - o.h / 2, 0); return dx * dx + dy * dy < r * r; };
+    for (const e of Enemies.list) if (!e.dead && inR(e)) Enemies.damage(e, C.missileDmg, true);
+    for (const pr of Props.list) if (pr.alive && inR(pr)) Props.damage(pr, C.missileDmg);
+    if (Boss.active && !Boss.dying && inR(Boss)) Boss.damage(C.missileDmg);
+  },
+  update(dt) {
+    const C = CONFIG.mech;
+    for (const m of this.list) {
+      m.t += dt;
+      m.speed = Math.min(C.missileSpeed, m.speed + 520 * dt);
+      if (m.t > 0.15) {
+        if (!m.target || m.target.dead || (m.target === Boss && (!Boss.active || Boss.dying))) m.target = this.findTarget(m);
+        const want = m.target ? Math.atan2((m.target.y - m.target.h / 2) - m.y, m.target.x - m.x) : (m.dir > 0 ? 0 : Math.PI);
+        let d = want - m.ang; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+        m.ang += Util.clamp(d, -C.missileTurn * dt, C.missileTurn * dt);
+      }
+      m.x += Math.cos(m.ang) * m.speed * dt; m.y += Math.sin(m.ang) * m.speed * dt;
+      if (Math.random() < 0.7) Pools.particle({ x: m.x - Math.cos(m.ang) * 6, y: m.y - Math.sin(m.ang) * 6, vx: Util.rand(-15, 15), vy: Util.rand(-15, 15), life: 0.4, color: 'rgba(170,190,200,1)', size: 2.5, kind: 'smoke', add: false, drag: 2 });
+      const pt = { x: m.x, y: m.y + 3, w: 6, h: 6 };
+      let hit = m.t > C.missileLife || Physics.pointInSolid(m.x, m.y) || m.y > CONFIG.world.height + 20 || m.y < -40;
+      if (!hit) for (const e of Enemies.list) if (!e.dead && Util.overlap(pt, e)) { hit = true; break; }
+      if (!hit) for (const pr of Props.list) if (pr.alive && Util.overlap(pt, pr)) { hit = true; break; }
+      if (!hit && Boss.active && !Boss.dying && Util.overlap(pt, Boss)) hit = true;
+      if (hit) this.explode(m);
+    }
+    this.list = this.list.filter(m => !m.done);
+  },
+  draw(t) {
+    for (const m of this.list) {
+      ctx.save(); ctx.translate(m.x, m.y); ctx.rotate(m.ang);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = 'rgba(255,170,60,0.8)'; ctx.beginPath(); ctx.moveTo(-4, -2); ctx.lineTo(-10 - Math.random() * 5, 0); ctx.lineTo(-4, 2); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#dfe8ee'; ctx.fillRect(-5, -2, 9, 4);
+      ctx.fillStyle = '#55ff9a'; ctx.beginPath(); ctx.moveTo(4, -2); ctx.lineTo(7, 0); ctx.lineTo(4, 2); ctx.fill();
+      ctx.restore();
+    }
+  }
+};
+
 /* ============================ Level (Fase 1 — Selva Bioluminescente) ============================ */
 const Level = {
   name: 'SELVA BIOLUMINESCENTE',
@@ -1762,6 +2136,7 @@ const Level = {
       // trecho 2 — torretas
       S(3875, 'turret', 40), S(3990, 'soldier', 110), S(4100, 'runner'), S(4180, 'capsule', 0, 'spread'),
       // checkpoint 1 (4350) — clareira (reservada para o mecha na Etapa 4)
+      S(4480, 'mech'), S(4650, 'soldier'), S(4900, 'runner'), S(5250, 'soldier', 0),
       S(4500, 'runner'), S(4560, 'runner'), S(4760, 'soldier', 80), S(4800, 'crate', 0, 'bombs'), S(5000, 'soldier', 140),
       S(5100, 'runner'), S(5160, 'runner'), S(5220, 'runner'), S(5300, 'turret'),
       // trecho 3 — escada de copas
@@ -1787,6 +2162,7 @@ const Level = {
       { x: 1170, y: 120, lines: ['Liberte aliados das cápsulas', 'Eles deixam itens para você'] },
       { x: 1740, y: 190, lines: ['BAIXO no chão = agachar', 'BAIXO no ar = mirar p/ baixo'] },
       { x: 3720, y: 180, lines: ['TORRETAS À FRENTE', 'Bombas resolvem rápido'] },
+      { x: 4430, y: 150, lines: ['BION-WALKER: encoste p/ pilotar', 'BOMBA=míssil · BAIXO+PULO sai'] },
       { x: 8440, y: 170, lines: ['PERIGO: SENTINELA-ALPHA', 'Observe os avisos dos ataques'] }
     ];
     this.checkpoints = [{ x: 80 }, { x: 4350 }, { x: 8250 }];
@@ -1915,7 +2291,7 @@ const Game = {
     this.startPhase(phase);
   },
   clearWorld() {
-    Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = [];
+    Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = []; MechUnits.list = []; Missiles.list = [];
     Pools.clearBullets();
     for (const p of Pools.particles) p.on = false;
     Boss.reset();
@@ -1934,8 +2310,7 @@ const Game = {
   },
   respawnAtCheckpoint() {
     const cp = Level.checkpoints[this.cpIdx];
-    const keepParticles = true;
-    Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = [];
+    Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = []; MechUnits.list = []; Missiles.list = [];
     Pools.clearBullets(); Boss.reset(); Level.openGate();
     this.arena = false; this.combo = 0; this.comboT = 0;
     this.camX = Math.max(0, cp.x - View.viewW * CONFIG.camera.lead);
@@ -2082,7 +2457,8 @@ const Game = {
     while (this.spawnIdx < Level.spawns.length && Level.spawns[this.spawnIdx].x < this.camX + View.viewW + 30) {
       const s = Level.spawns[this.spawnIdx++];
       if (this.arena || s.x > Level.arenaX) continue;
-      if (CONFIG.enemies[s.type]) Enemies.create(s.type, s.x, s.y);
+      if (s.type === 'mech') MechUnits.create(s.x, s.y - 40);
+      else if (CONFIG.enemies[s.type]) Enemies.create(s.type, s.x, s.y);
       else if (!s.done) Props.create(s.type, s.x, s.y, s.item, s);
     }
     if (this.comboT > 0) { this.comboT -= dt; if (this.comboT <= 0) this.combo = 0; }
@@ -2090,6 +2466,8 @@ const Game = {
     Enemies.update(dt);
     Boss.update(dt);
     Bombs.update(dt);
+    Missiles.update(dt);
+    MechUnits.update(dt);
     Bullets.update(dt);
     Props.update(dt);
     Allies.update(dt);
@@ -2124,9 +2502,11 @@ const Game = {
       Items.draw(t);
       Enemies.draw(t);
       Boss.draw(t);
+      MechUnits.draw(t);
       Allies.draw(t);
       Player.draw(t);
       Bombs.draw(t);
+      Missiles.draw(t);
       Bullets.draw();
       FX.draw();
       ctx.textAlign = 'center'; ctx.font = 'bold 10px monospace';
@@ -2246,6 +2626,21 @@ const UI = {
     ctx.fillStyle = '#eef4f8'; Util.rr(ctx, lx, top + 1, 8, 7, 2); ctx.fill();
     ctx.fillStyle = '#3ff6ff'; ctx.fillRect(lx + 4, top + 3, 3.5, 1.8);
     ctx.font = 'bold 9px monospace'; ctx.fillStyle = '#e9fff3'; ctx.fillText('x' + Game.lives, lx + 10, top + 8);
+    if (hasMech) {
+      const m = p.mech, MC = CONFIG.mech;
+      ctx.font = 'bold 8px monospace'; ctx.fillStyle = '#ffd27a';
+      ctx.fillText('METRALHADORA DUPLA', left, top + 21); ctx.fillText('∞', left + 110, top + 21);
+      ctx.fillStyle = '#55ff9a'; ctx.fillText('MÍSSEIS', left, top + 34);
+      for (let i = 0; i < MC.missiles; i++) { ctx.fillStyle = i < m.missiles ? '#55ff9a' : '#1a2a2a'; ctx.fillRect(left + 40 + i * 7, top + 28, 5, 6); }
+      if (m.missiles < MC.missiles) { ctx.fillStyle = 'rgba(85,255,154,0.5)'; ctx.fillRect(left + 40 + m.missiles * 7, top + 34, 5 * (m.rechargeT / MC.missileRecharge), 1.5); }
+      const ready = p.dashCd <= 0;
+      ctx.fillStyle = ready ? '#3ff6ff' : '#5b7480'; ctx.fillText(ready ? 'INVESTIDA OK' : 'INVESTIDA', left + 100, top + 34);
+      const low = m.armor <= 8 && Math.floor(t * 6) % 2 === 0;
+      ctx.fillStyle = low ? '#ff4d6d' : '#ffb02e'; ctx.fillText('BLINDAGEM', left, top + 46);
+      ctx.fillStyle = '#152430'; ctx.fillRect(left + 50, top + 40, 90, 6);
+      ctx.fillStyle = low ? '#ff4d6d' : '#ffb02e'; ctx.fillRect(left + 50, top + 40, 90 * (m.armor / m.maxArmor), 6);
+      ctx.fillStyle = '#ffffff'; ctx.fillText(String(Math.ceil(m.armor)), left + 144, top + 46);
+    } else {
     // linha 2: arma e munição
     const W = CONFIG.weapons[p.weapon];
     const wc = p.weapon === 'pulse' ? '#9fe9ff' : W.color;
@@ -2269,11 +2664,6 @@ const UI = {
     const k = 1 - p.dashCd / CONFIG.player.dashCooldown;
     ctx.fillStyle = ready ? '#3ff6ff' : '#2a7f8f'; ctx.fillRect(left + 66, top + 28, 56 * k, 6);
     if (ready) { ctx.fillStyle = '#bffcff'; ctx.fillText('OK', left + 126, top + 34); }
-    // linha 4: blindagem do mecha (Etapa 4)
-    if (hasMech) {
-      ctx.fillStyle = '#ffb02e'; ctx.fillText('MECHA', left, top + 46);
-      ctx.fillStyle = '#152430'; ctx.fillRect(left + 34, top + 40, 100, 6);
-      ctx.fillStyle = '#ffb02e'; ctx.fillRect(left + 34, top + 40, 100 * (p.mech.armor / p.mech.maxArmor), 6);
     }
     // pontos (centro)
     const cx = View.viewW / 2;
@@ -2558,7 +2948,8 @@ const UI = {
         ctx.strokeStyle = b.color; ctx.lineWidth = on ? 3 : 2; ctx.stroke();
         this.drawIcon(b.name, b.x, b.y - b.r * 0.12, b.r * 0.42, b.color);
         ctx.font = `bold ${Math.round(b.r * 0.26)}px monospace`; ctx.textAlign = 'center';
-        ctx.fillStyle = b.color; ctx.fillText(b.label, b.x, b.y + b.r * 0.62);
+        const lbl = Player.mech && b.name === 'bomb' ? 'MÍSSIL' : (Player.mech && b.name === 'dash' ? 'INVESTIDA' : b.label);
+        ctx.fillStyle = b.color; ctx.fillText(lbl, b.x, b.y + b.r * 0.62);
       }
       ctx.globalAlpha = 1;
     }
