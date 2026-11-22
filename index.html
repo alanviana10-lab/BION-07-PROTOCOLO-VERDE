@@ -7,6 +7,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>BION-07: Protocolo Verde</title>
+<!--PWA-->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<!--/PWA-->
 <style>
   html, body {
     margin: 0; padding: 0;
@@ -32,8 +37,11 @@
 <body>
 <canvas id="game" tabindex="0"></canvas>
 <div id="sa"></div>
+<!--PLATFORM_SDK-->
 <script>
 'use strict';
+// Plataforma do build: 'web' (GitHub Pages / PWA) ou 'crazygames' (gerado por tools/build-crazygames.py)
+const BION_PLATFORM = 'web';
 /* =====================================================================
    BION-07: PROTOCOLO VERDE
    Arquivo único. Módulos: CONFIG, Util, Save, Audio, View/Render, Input,
@@ -42,7 +50,7 @@
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v1.0.0',
+  version: 'v1.1.0',
   phasesAvailable: 3,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
   render: { maxDpr: 2, maxBgRes: 3, reducedDpr: 1.25 },
@@ -151,7 +159,7 @@ const Save = {
   load() {
     this.data = this.defaults();
     try {
-      const raw = window.localStorage.getItem(this.KEY);
+      const raw = Platform.getItem(this.KEY);
       if (raw) {
         const d = JSON.parse(raw);
         if (d && d.versao === 1) {
@@ -164,8 +172,74 @@ const Save = {
     } catch (e) { /* sem storage: segue sem salvar */ }
   },
   write() {
-    try { window.localStorage.setItem(this.KEY, JSON.stringify(this.data)); } catch (e) { /* ignora */ }
+    try { Platform.setItem(this.KEY, JSON.stringify(this.data)); } catch (e) { /* ignora */ }
   }
+};
+
+/* ============================ Platform (PWA / CrazyGames) ============================ */
+// Todas as chamadas viram "não faz nada" se o SDK não existir: o jogo nunca trava por causa dele.
+const Platform = {
+  name: BION_PLATFORM, sdk: null, ready: false, inGameplay: false, adActive: false, installPrompt: null,
+  isCrazy() { return this.name === 'crazygames'; },
+  call(fn) { try { return fn(); } catch (e) { return undefined; } },
+  async init() {
+    if (this.isCrazy()) {
+      const S = window.CrazyGames && window.CrazyGames.SDK;
+      if (S) {
+        this.call(() => S.game.loadingStart());
+        try { await S.init(); this.sdk = S; this.ready = S.environment !== 'disabled'; } catch (e) { this.ready = false; }
+        this.call(() => S.game.loadingStop());
+      }
+    } else {
+      // PWA: service worker (só funciona em http/https) e convite de instalação
+      if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
+      window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); this.installPrompt = e; });
+      window.addEventListener('appinstalled', () => { this.installPrompt = null; });
+    }
+  },
+  canInstall() { return !!this.installPrompt; },
+  async install() {
+    const p = this.installPrompt;
+    if (!p) return;
+    this.installPrompt = null;
+    try { p.prompt(); await p.userChoice; } catch (e) {}
+  },
+  // armazenamento: SDK.data do CrazyGames quando disponível, senão localStorage
+  getItem(k) {
+    if (this.ready && this.sdk.data) { const v = this.call(() => this.sdk.data.getItem(k)); if (v !== undefined) return v; }
+    return window.localStorage.getItem(k);
+  },
+  setItem(k, v) {
+    if (this.ready && this.sdk.data) this.call(() => this.sdk.data.setItem(k, v));
+    window.localStorage.setItem(k, v);
+  },
+  // avisa o portal quando o jogador está realmente jogando
+  setGameplay(on) {
+    if (on === this.inGameplay) return;
+    this.inGameplay = on;
+    if (this.ready) this.call(() => on ? this.sdk.game.gameplayStart() : this.sdk.game.gameplayStop());
+  },
+  happytime() { if (this.ready) this.call(() => this.sdk.game.happytime()); },
+  hasRewarded() { return this.ready; },
+  // durante o anúncio: jogo parado (estamos em menus) e áudio mudo
+  muteForAd(on) {
+    this.adActive = on;
+    if (Audio.master && Audio.ctx) Audio.master.gain.setTargetAtTime(on || Audio.muted ? 0 : CONFIG.audio.master, Audio.ctx.currentTime, 0.02);
+  },
+  requestAd(type, onDone, onReward) {
+    if (!this.ready || this.adActive) { onDone(false); return; }
+    let finished = false;
+    const end = (ok) => { if (finished) return; finished = true; this.muteForAd(false); Input.clear(); if (ok && onReward) onReward(); onDone(ok); };
+    try {
+      this.sdk.ad.requestAd(type, {
+        adStarted: () => this.muteForAd(true),
+        adFinished: () => end(true),
+        adError: () => end(false)
+      });
+    } catch (e) { end(false); }
+  },
+  midgame(cb) { this.requestAd('midgame', () => cb()); },
+  rewarded(onReward, onFail) { this.requestAd('rewarded', ok => { if (!ok && onFail) onFail(); }, onReward); }
 };
 
 /* ============================ Audio ============================ */
@@ -3094,7 +3168,7 @@ const Level = {
     }
     // placas holográficas
     ctx.textAlign = 'center';
-    if (!Game.inMenu()) for (const s of this.signs) {
+    if (!Game.inMenu() && !window.__BION_COVER) for (const s of this.signs) {
       if (s.x + 90 < L || s.x - 90 > R) continue;
       const a = 0.75 + 0.25 * Math.sin(t * 3 + s.x);
       ctx.strokeStyle = 'rgba(63,246,255,0.5)'; ctx.lineWidth = 1;
@@ -3265,7 +3339,7 @@ const Game = {
     Level.build(phase);
     this.clearWorld();
     this.cpIdx = 0; this.arena = false; this.bossDone = false;
-    this.camX = 0; this.spawnIdx = 0; this.levelTime = 0;
+    this.camX = 0; this.spawnIdx = 0; this.levelTime = 0; this.revivedPhase = false;
     this.phaseStart = { kills: this.stats.kills, allies: this.stats.allies, time: this.stats.time }; this.phaseMaxCombo = 0;
     Player.reset(Level.checkpoints[0].x, CONFIG.world.groundY);
     this.paused = false; Music.setPaused(false);
@@ -3300,6 +3374,7 @@ const Game = {
   bossDefeated(x, y) {
     this.bossDone = true;
     Music.stop();
+    Platform.happytime();
     this.addScore(Boss.score, x, y);
     this.showBanner(Boss.kind === 'overlord' ? 'NÚCLEO DESTRUÍDO!' : 'SETOR LIMPO!', Boss.name + (Boss.kind === 'sentinela' ? ' DESTRUÍDA' : ' DESTRUÍDO'), '#55ff9a');
     Player.invuln = 99;
@@ -3320,6 +3395,13 @@ const Game = {
     this.newRecord = false;
     this.saveRecord();
     this.goto('result');
+  },
+  // anúncio recompensado: +1 vida e volta ao checkpoint mantendo os pontos (1 vez por setor)
+  revive() {
+    this.revivedPhase = true;
+    this.lives = 0;
+    this.respawnAtCheckpoint();
+    this.showBanner('+1 VIDA', 'Obrigado pelo apoio!', '#ffb02e');
   },
   gameOver() {
     this.newRecord = false;
@@ -3397,6 +3479,7 @@ const Game = {
   update(dt) {
     this.time += dt;
     Input.update();
+    Platform.setGameplay(this.isPlaying() && !this.paused);
     if (this.state === 'intro') { this.introT -= dt; if (this.introT <= 0) this.goto('play'); return; }
     if (this.state === 'victory') { FX.update(dt); return; }
     if (!this.isPlaying() || this.paused) return;
@@ -3494,14 +3577,14 @@ const Game = {
       Bullets.draw();
       FX.draw();
       ctx.textAlign = 'center'; ctx.font = 'bold 10px monospace';
-      for (const p of this.popups) { ctx.globalAlpha = Math.min(1, p.t * 2); ctx.fillStyle = '#000'; ctx.fillText(p.text, p.x + 1, p.y + 1); ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y); }
+      if (!window.__BION_COVER) for (const p of this.popups) { ctx.globalAlpha = Math.min(1, p.t * 2); ctx.fillStyle = '#000'; ctx.fillText(p.text, p.x + 1, p.y + 1); ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y); }
       ctx.globalAlpha = 1;
     }
     ctx.restore();
     ctx.fillStyle = 'rgba(0,0,0,0.18)';
     ctx.fillRect(0, 0, View.viewW, 6); ctx.fillRect(0, 354, View.viewW, 6);
 
-    if (this.isPlaying()) { UI.drawHUD(t); if (!this.paused) UI.drawBanner(t); }
+    if (this.isPlaying() && !window.__BION_COVER) { UI.drawHUD(t); if (!this.paused) UI.drawBanner(t); }
     UI.drawOverlay(t);
     ctx.restore();
 
@@ -3513,6 +3596,8 @@ const Game = {
 /* ============================ UI ============================ */
 const UI = {
   stickHome: { x: 0, y: 0, r: 56 },
+  // controles de toque aparecem em aparelhos com tela de toque (ou após o primeiro toque)
+  touchSeen: ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0,
   buttons: [], top: [],
   layout() {
     const W = View.W, H = View.H, s = View.safe, C = CONFIG.input;
@@ -3543,6 +3628,7 @@ const UI = {
       { name: 'mute', x: rightEdge - tb * 2 - 8, y: ty, w: tb, h: tb },
       { name: 'full', x: rightEdge - tb * 3 - 16, y: ty, w: tb, h: tb }
     ];
+    if (Platform.isCrazy()) this.top.pop();   // o portal já oferece tela cheia
   },
   hitTop(x, y) {
     for (const b of this.top) if (x >= b.x - 4 && x <= b.x + b.w + 4 && y >= b.y - 4 && y <= b.y + b.h + 4) return b.name;
@@ -3714,7 +3800,9 @@ const UI = {
       if (Save.data.progresso.faseDesbloqueada > 1) it.push({ id: 'continue', label: 'CONTINUAR', sub: 'SETOR ' + Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable) });
       it.push({ id: 'howto', label: 'COMO JOGAR', color: '#c07bff' });
       it.push({ id: 'options', label: 'OPÇÕES', color: '#ffb02e', h: 26 });
-      return { y: it.length > 3 && it[1].sub ? 186 : 192, items: it };
+      if (Platform.canInstall()) it.push({ id: 'install', label: 'INSTALAR APP', color: '#55ff9a', h: 24 });
+      const tall = it.reduce((a, b) => a + (b.h || (b.sub ? 38 : 30)) + 8, 0);
+      return { y: Math.min(192, 352 - tall), items: it };
     }
     if (st === 'diff') return { y: 96, w: 310, items: [
       { id: 'd_recruta', label: 'RECRUTA', sub: 'Vida 8 · inimigos 85% · cadência 70% · x1   Recorde ' + rec.recruta, color: '#55ff9a', h: 42 },
@@ -3726,7 +3814,12 @@ const UI = {
     if (st === 'result') return { y: 300, items: [{ id: 'next', label: Game.phase < CONFIG.phasesAvailable ? 'PRÓXIMO SETOR' : 'CONTINUAR', color: '#55ff9a' }] };
     if (st === 'next') return { y: 250, items: [{ id: 'tomenu', label: 'MENU PRINCIPAL' }] };
     if (st === 'victory') return { y: 306, items: [{ id: 'tomenu', label: 'MENU PRINCIPAL', color: '#55ff9a' }] };
-    if (st === 'gameover') return { y: 222, items: [{ id: 'retry', label: 'CONTINUAR', sub: 'Recomeça o setor · pontuação zera', color: '#55ff9a' }, { id: 'tomenu', label: 'MENU PRINCIPAL' }] };
+    if (st === 'gameover') {
+      const it = [];
+      if (Platform.hasRewarded() && !Game.revivedPhase) it.push({ id: 'revive', label: '+1 VIDA (ANÚNCIO)', sub: 'Veja um vídeo e volte ao checkpoint', color: '#ffb02e' });
+      it.push({ id: 'retry', label: 'RECOMEÇAR SETOR', sub: 'Pontuação zera', color: '#55ff9a' }, { id: 'tomenu', label: 'MENU PRINCIPAL', h: 26 });
+      return { y: it.length > 2 ? 204 : 222, items: it };
+    }
     return null;
   },
   menuRects() {
@@ -3756,8 +3849,10 @@ const UI = {
     else if (id.startsWith('d_')) { Game.diffKey = id.slice(2); Game.startRun(Game.pendingPhase); }
     else if (id === 'resume') Game.setPaused(false);
     else if (id === 'tomenu') Game.toMenu();
-    else if (id === 'retry') Game.startRun(Game.phase);
-    else if (id === 'next') { if (Game.phase < CONFIG.phasesAvailable) Game.nextPhase(); else if (Game.phase >= 3) { Audio.play('victory'); Game.goto('victory'); } else Game.goto('next'); }
+    else if (id === 'retry') Platform.midgame(() => Game.startRun(Game.phase));
+    else if (id === 'revive') Platform.rewarded(() => Game.revive(), () => Game.popup(Player.x, 200, 'ANÚNCIO INDISPONÍVEL', '#ff9a9a'));
+    else if (id === 'install') Platform.install();
+    else if (id === 'next') { if (Game.phase < CONFIG.phasesAvailable) Platform.midgame(() => Game.nextPhase()); else if (Game.phase >= 3) { Audio.play('victory'); Game.goto('victory'); } else Game.goto('next'); }
   },
   menuTap(x, y) {
     if (Game.state === 'intro') { Game.goto('play'); return; }
@@ -3937,12 +4032,12 @@ const UI = {
       this.drawMenu(t);
     } else if (st === 'gameover') {
       this.veil(0.8);
-      this.neonText('GAME OVER', cx, 110, 36, '#ffd0d8', '#ff4d6d');
+      this.neonText('GAME OVER', cx, 92, 36, '#ffd0d8', '#ff4d6d');
       ctx.font = 'bold 12px monospace'; ctx.fillStyle = '#ffe27a'; ctx.textAlign = 'center';
-      ctx.fillText('PONTOS ' + Game.score, cx, 148);
+      ctx.fillText('PONTOS ' + Game.score, cx, 128);
       ctx.font = '9px monospace'; ctx.fillStyle = '#9fb8c8';
-      ctx.fillText('Recorde ' + Game.diffKey + ': ' + Save.data.recordes[Game.diffKey], cx, 164);
-      if (Game.newRecord && Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 196, 16, '#ffffff', '#ffb02e');
+      ctx.fillText('Recorde ' + Game.diffKey + ': ' + Save.data.recordes[Game.diffKey], cx, 144);
+      if (Game.newRecord && Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 176, 16, '#ffffff', '#ffb02e');
       this.drawMenu(t);
     } else if (Game.paused) {
       this.veil(0.7);
@@ -3977,6 +4072,8 @@ const UI = {
       ctx.fillText('Gire o celular para jogar melhor', W / 2, top + 76);
     }
     const playing = Game.isPlaying() && !Game.paused;
+    if (window.__BION_COVER) return;
+    if (!View.portrait && !UI.touchSeen) { for (const b of this.top) { ctx.fillStyle = 'rgba(8,16,28,0.55)'; Util.rr(ctx, b.x, b.y, b.w, b.h, 8); ctx.fill(); ctx.strokeStyle = 'rgba(63,246,255,0.55)'; ctx.lineWidth = 1.5; ctx.stroke(); this.drawTopIcon(b); } return; }
     const alpha = View.portrait ? 1 : 0.85;
     if (playing || View.portrait) {
       ctx.globalAlpha = playing ? alpha : 0.35;
@@ -4072,6 +4169,7 @@ const UI = {
 /* ============================ Eventos ============================ */
 function onPointerDown(e) {
   e.preventDefault();
+  if (e.pointerType === 'touch') UI.touchSeen = true;
   Audio.init();
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   const x = e.clientX, y = e.clientY;
@@ -4181,6 +4279,8 @@ View.resize();
 window.__BION_UI = UI;
 window.__BION_MUSIC = Music;
 Music.play('menu');
+Platform.init().then(() => { if (Platform.ready) { Save.load(); Audio.setMuted(!!Save.data.config.mudo); View.resize(); } });
+window.__BION_PLATFORM = Platform;
 requestAnimationFrame(frame);
 window.__BION = { Game, Player, Enemies, Input, View, CONFIG, Pools };
 </script>
