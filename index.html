@@ -50,7 +50,7 @@ const BION_PLATFORM = 'web';
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v1.1.0',
+  version: 'v1.2.0',
   phasesAvailable: 3,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
   render: { maxDpr: 2, maxBgRes: 3, reducedDpr: 1.25 },
@@ -154,7 +154,7 @@ const Save = {
   KEY: 'bion07_protocolo_verde_v1',
   data: null,
   defaults() {
-    return { versao: 1, perfil: { id: 'local', nome: 'Jogador' }, recordes: { recruta: 0, veterano: 0, sobrecarga: 0 }, progresso: { faseDesbloqueada: 1 }, config: { mudo: false, musica: true, efeitosReduzidos: false } };
+    return { versao: 1, perfil: { id: 'local', nome: 'Jogador' }, recordes: { recruta: 0, veterano: 0, sobrecarga: 0 }, progresso: { faseDesbloqueada: 1 }, config: { mudo: false, musica: true, efeitosReduzidos: false, idioma: 'auto' } };
   },
   load() {
     this.data = this.defaults();
@@ -173,6 +173,118 @@ const Save = {
   },
   write() {
     try { Platform.setItem(this.KEY, JSON.stringify(this.data)); } catch (e) { /* ignora */ }
+  }
+};
+
+/* ============================ I18N (Português / English) ============================ */
+// Todo texto desenhado no canvas passa por I18N.tr(). Em inglês, procura a frase exata no
+// dicionário; se não achar, troca os pedaços conhecidos (ex.: "SETOR 2" -> "SECTOR 2").
+const I18N = {
+  lang: 'pt', cache: new Map(), missing: new Set(), phrases: null,
+  detect() { const l = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase(); return l.startsWith('pt') ? 'pt' : 'en'; },
+  init() {
+    const c = Save.data.config.idioma;
+    this.set(c === 'pt' || c === 'en' ? c : this.detect());
+  },
+  set(lang) {
+    this.lang = lang; this.cache.clear();
+    try { document.documentElement.lang = lang === 'en' ? 'en' : 'pt-BR'; document.title = lang === 'en' ? 'BION-07: Green Protocol' : 'BION-07: Protocolo Verde'; } catch (e) {}
+  },
+  toggle() { this.set(this.lang === 'en' ? 'pt' : 'en'); Save.data.config.idioma = this.lang; Save.write(); },
+  tr(s) {
+    if (this.lang === 'pt' || typeof s !== 'string' || s.length < 2) return s;
+    let r = this.cache.get(s);
+    if (r !== undefined) return r;
+    r = this.EN[s];
+    if (r === undefined) {
+      if (!this.phrases) this.phrases = Object.keys(this.EN).filter(k => k.length >= 3).sort((a, b) => b.length - a.length);
+      // marcadores evitam que um trecho já traduzido seja trocado de novo
+      const parts = [];
+      let t = s;
+      for (const k of this.phrases) {
+        if (t.indexOf(k) < 0) continue;
+        t = t.split(k).join('\u0001' + parts.length + '\u0002');
+        parts.push(this.EN[k]);
+      }
+      r = t.replace(/\u0001(\d+)\u0002/g, (m, i) => parts[+i]);
+      if (/[ãõçáéíóúâêôàÃÕÇÁÉÍÓÚÂÊÔ]/.test(r)) this.missing.add(s);
+    }
+    if (this.cache.size > 3000) this.cache.clear();
+    this.cache.set(s, r);
+    return r;
+  },
+  EN: {
+    // menus e telas
+    'JOGAR': 'PLAY', 'CONTINUAR': 'CONTINUE', 'COMO JOGAR': 'HOW TO PLAY', 'OPÇÕES': 'OPTIONS', 'INSTALAR APP': 'INSTALL APP',
+    'VOLTAR': 'BACK', 'MENU PRINCIPAL': 'MAIN MENU', 'PRÓXIMO SETOR': 'NEXT SECTOR', 'RECOMEÇAR SETOR': 'RESTART SECTOR',
+    'Pontuação zera': 'Score resets', '+1 VIDA (ANÚNCIO)': '+1 LIFE (AD)', 'Veja um vídeo e volte ao checkpoint': 'Watch a video, back to checkpoint',
+    'PRÓXIMA PÁGINA': 'NEXT PAGE', 'PÁGINA ANTERIOR': 'PREVIOUS PAGE', 'Página ': 'Page ', ' de 2': ' of 2',
+    'PROTOCOLO VERDE': 'GREEN PROTOCOL', 'DIFICULDADE': 'DIFFICULTY',
+    'RECRUTA': 'ROOKIE', 'VETERANO': 'VETERAN', 'SOBRECARGA': 'OVERLOAD', 'recruta': 'rookie', 'veterano': 'veteran', 'sobrecarga': 'overload',
+    'Vida 8 · inimigos 85% · cadência 70% · x1   Recorde ': 'Health 8 · enemies 85% · fire rate 70% · x1   Best ',
+    'Vida 5 · inimigos 100% · cadência 100% · x1   Recorde ': 'Health 5 · enemies 100% · fire rate 100% · x1   Best ',
+    'Vida 3 · inimigos 120% · cadência 130% · x2   Recorde ': 'Health 3 · enemies 120% · fire rate 130% · x2   Best ',
+    'RECORDES  Recruta ': 'RECORDS  Rookie ', ' · Veterano ': ' · Veteran ', ' · Sobrecarga ': ' · Overload ',
+    'SETOR ': 'SECTOR ', 'SELVA BIOLUMINESCENTE': 'BIOLUMINESCENT JUNGLE', 'RUÍNAS DA TORRE DE REDE': 'NETWORK TOWER RUINS', 'NÚCLEO SUBTERRÂNEO': 'UNDERGROUND CORE',
+    'Dificuldade: ': 'Difficulty: ', '   ·   toque para começar': '   ·   tap to start',
+    'As opções ficam salvas neste aparelho.': 'Options are saved on this device.',
+    'EFEITOS REDUZIDOS: ': 'REDUCED EFFECTS: ', 'SIM': 'YES', 'NÃO': 'NO', 'Menos partículas, sem tremor e resolução menor': 'Fewer particles, no shake, lower resolution',
+    'MÚSICA: ': 'MUSIC: ', 'DESLIGADA': 'OFF', 'LIGADA': 'ON', 'SOM: ': 'SOUND: ', 'LIGADO': 'ON', 'MUDO': 'MUTED',
+    'IDIOMA / LANGUAGE: ': 'LANGUAGE / IDIOMA: ', 'PORTUGUÊS': 'PORTUGUESE',
+    'PAUSADO': 'PAUSED', 'Teclado: P/Esc continua · WASD/Setas mover · J/Z tiro': 'Keyboard: P/Esc resume · WASD/Arrows move · J/Z fire',
+    'K/Espaço pulo · L bomba · Shift dash · M mudo': 'K/Space jump · L bomb · Shift dash · M mute',
+    'NÚCLEO DANIFICADO': 'CORE DAMAGED', 'Vidas extras: ': 'Extra lives: ', ' · voltando ao checkpoint...': ' · returning to checkpoint...', 'Sem vidas extras...': 'No extra lives...',
+    ' CONCLUÍDO': ' CLEARED', 'PONTOS': 'SCORE', 'PONTOS ': 'SCORE ', 'INIMIGOS DESTRUÍDOS': 'ENEMIES DESTROYED', 'ALIADOS LIBERTADOS': 'ALLIES FREED',
+    'MAIOR COMBO': 'BEST COMBO', 'TEMPO': 'TIME', 'MAIOR COMBO / TEMPO': 'BEST COMBO / TIME', 'NOVO RECORDE!': 'NEW RECORD!', 'Recorde ': 'Best ',
+    'Este setor chega na próxima etapa de desenvolvimento.': 'This sector arrives in a future update.', 'Seu progresso e recorde foram salvos.': 'Your progress and record were saved.',
+    'VITÓRIA!': 'VICTORY!', 'O OVERLORD-X9 caiu e o vírus foi apagado.': 'OVERLORD-X9 has fallen and the virus is erased.',
+    'KAI-4 restaurou o Protocolo Verde da reserva.': 'KAI-4 restored the reserve\'s Green Protocol.', 'PONTUAÇÃO FINAL  ': 'FINAL SCORE  ',
+    // HUD e controles
+    'CANHÃO DE PULSO': 'PULSE CANNON', 'METRALHADORA DUPLA': 'TWIN MACHINE GUN', 'MÍSSEIS': 'MISSILES', 'INVESTIDA OK': 'RAM READY', 'INVESTIDA': 'RAM',
+    'BLINDAGEM': 'ARMOR', 'TIRO': 'FIRE', 'PULO': 'JUMP', 'BOMBA': 'BOMB', 'MÍSSIL': 'MISSILE', 'Gire o celular para jogar melhor': 'Rotate your phone for a better view',
+    // avisos
+    'Progresso salvo nesta fase': 'Progress saved for this sector', 'VIDAS x': 'LIVES x', 'De volta ao checkpoint': 'Back to checkpoint',
+    'ALERTA!': 'ALERT!', ' DETECTADA': ' DETECTED', ' DESTRUÍDA': ' DESTROYED', ' DESTRUÍDO': ' DESTROYED', 'SETOR LIMPO!': 'SECTOR CLEAR!',
+    'NÚCLEO DESTRUÍDO!': 'CORE DESTROYED!', 'SOBRECARGA!': 'OVERLOAD!', ' FORA DE CONTROLE': ' OUT OF CONTROL', 'BAIXO + PULO para sair': 'DOWN + JUMP to exit',
+    'MECHA DESTRUÍDO': 'MECH DESTROYED', 'KAI-4 ejetado': 'KAI-4 ejected', 'MECHA PERDIDO': 'MECH LOST', 'Caiu no poço': 'Fell into the pit',
+    '+1 VIDA': '+1 LIFE', 'Obrigado pelo apoio!': 'Thanks for your support!', 'ARMA ESPECIAL': 'SPECIAL WEAPON', 'MUNIÇÃO': 'AMMO', ' RECARREGADA': ' RELOADED',
+    'BOMBAS +': 'BOMBS +', 'REPARO +': 'REPAIR +', 'BLINDAGEM +': 'ARMOR +', 'MUNIÇÃO ESGOTADA': 'OUT OF AMMO', '-1 VIDA': '-1 LIFE',
+    'REFORÇOS!': 'REINFORCEMENTS!', 'ANÚNCIO INDISPONÍVEL': 'AD UNAVAILABLE', 'AGACHE!': 'DUCK!', 'PULE!': 'JUMP!', 'ENTRAR': 'ENTER', 'Obrigado, KAI-4!': 'Thanks, KAI-4!',
+    // placas
+    'MOVA-SE E ATIRE': 'MOVE AND SHOOT', 'Segure TIRO = automático': 'Hold FIRE = auto-fire', 'CIMA = mirar p/ cima': 'UP = aim up',
+    'Diagonal = mirar na diagonal': 'Diagonal = aim diagonally', 'Segure PULO = mais alto': 'Hold JUMP = jump higher', 'BAIXO+PULO desce da plataforma': 'DOWN+JUMP drops through',
+    'PERTO DO ALVO: TIRO = FACA': 'UP CLOSE: FIRE = KNIFE', 'BOMBA quica 1 vez e explode': 'BOMBS bounce once, then blow', 'DASH: invulnerável': 'DASH: invulnerable',
+    'Atravessa tiros inimigos': 'Passes through enemy shots', 'Liberte aliados das cápsulas': 'Free allies from capsules', 'Eles deixam itens para você': 'They drop items for you',
+    'BAIXO no chão = agachar': 'DOWN on ground = crouch', 'BAIXO no ar = mirar p/ baixo': 'DOWN in the air = aim down', 'TORRETAS À FRENTE': 'TURRETS AHEAD',
+    'Bombas resolvem rápido': 'Bombs make quick work of them', 'PERIGO: ': 'DANGER: ', 'Observe os avisos dos ataques': 'Watch the attack warnings',
+    'BION-WALKER: encoste p/ pilotar': 'BION-WALKER: touch to pilot', 'BOMBA=míssil · BAIXO+PULO sai': 'BOMB=missile · DOWN+JUMP exits',
+    'LASERS DE BARREIRA': 'BARRIER LASERS', 'Espere desligar ou use o DASH': 'Wait until off, or DASH through', 'DRONES DE PATRULHA': 'PATROL DRONES',
+    'Mire para cima ou na diagonal': 'Aim up or diagonally', 'Minas quicam · raios avisam antes': 'Mines bounce · rays are telegraphed',
+    'Cair no poço = -1 de vida': 'Falling into a pit = -1 health', 'PLATAFORMA MÓVEL': 'MOVING PLATFORM', 'Espere ela chegar e pule': 'Wait for it, then jump on',
+    'TÚNEL ESTREITO': 'NARROW TUNNEL', 'Mechas não passam aqui': 'Mechs cannot fit here', 'BION-WALKER DISPONÍVEL': 'BION-WALKER AVAILABLE',
+    'Leve-o até o núcleo': 'Take it to the core', 'NÚCLEO: OVERLORD-X9': 'CORE: OVERLORD-X9', 'Abaixo de 50%: SOBRECARGA': 'Below 50%: OVERLOAD',
+    // como jogar
+    'COMO JOGAR — CONTROLES': 'HOW TO PLAY — CONTROLS', 'COMO JOGAR — REGRAS': 'HOW TO PLAY — RULES', 'DIRECIONAL': 'D-PAD',
+    'TELA CHEIA · MUDO · PAUSA': 'FULLSCREEN · MUTE · PAUSE', 'TOQUE': 'TOUCH', 'TECLADO': 'KEYBOARD', 'MECHA BION-WALKER': 'BION-WALKER MECH',
+    'ITENS': 'ITEMS', 'VIDAS': 'LIVES', 'PERIGOS E CHEFES': 'HAZARDS & BOSSES',
+    'Direcional: andar · cima/diagonal: mirar': 'D-pad: walk · up/diagonal: aim', 'Baixo: agachar · no ar: mirar para baixo': 'Down: crouch · in the air: aim down',
+    'TIRO: segure = automático': 'FIRE: hold = auto-fire', 'Perto do alvo, TIRO vira FACA DE PLASMA': 'Up close, FIRE becomes a PLASMA KNIFE',
+    'PULO: segure = pulo mais alto': 'JUMP: hold = higher jump', 'BOMBA: arremesso que quica e explode': 'BOMB: a throw that bounces and explodes',
+    'DASH: impulso invulnerável (recarga 1,5 s)': 'DASH: invulnerable burst (1.5 s cooldown)', 'Deslize o dedo entre os botões sem soltar': 'Slide your finger between buttons',
+    'WASD / Setas: mover, mirar, agachar      J ou Z: tiro / faca': 'WASD / Arrows: move, aim, crouch      J or Z: fire / knife',
+    'K, X ou Espaço: pulo      L ou C: bomba      Shift: dash': 'K, X or Space: jump      L or C: bomb      Shift: dash',
+    'P ou Esc: pausa      M: mudo      BAIXO + PULO: desce da plataforma': 'P or Esc: pause      M: mute      DOWN + JUMP: drop through',
+    'Encoste para entrar · TIRO: metralhadora · BOMBA: mísseis teleguiados': 'Touch to board · FIRE: machine gun · BOMB: homing missiles',
+    'DASH: investida · BAIXO + PULO: sair · blindagem zerada = ejeção': 'DASH: ram · DOWN + JUMP: exit · no armor = eject',
+    'SPREAD: leque de 5 tiros': 'SPREAD: 5-shot fan', 'LASER: atravessa inimigos': 'LASER: pierces enemies', 'FLAME: jato que atinge grupos': 'FLAME: stream that hits groups',
+    'Munição / arma aleatória': 'Ammo / random weapon', 'Bombas +5': 'Bombs +5', 'Reparo +2 de vida': 'Repair +2 health',
+    'Abates em até 2,5 s aumentam o combo: x2 (5) · x3 (10) · x4 (20) · x5 (30)': 'Kills within 2.5 s raise the combo: x2 (5) · x3 (10) · x4 (20) · x5 (30)',
+    'Levar dano zera o combo.': 'Taking damage resets the combo.',
+    'Barra de vida + 3 vidas extras. Ao zerar a barra, volta ao último checkpoint.': 'Health bar + 3 extra lives. When it runs out, you return to the last checkpoint.',
+    'Cair num poço tira 1 de vida e volta à última plataforma segura.': 'Falling into a pit costs 1 health and returns you to the last safe platform.',
+    'Lasers piscam em laranja antes de ligar. Liberte aliados das cápsulas.': 'Lasers flash orange before turning on. Free allies from capsules.',
+    'Todo ataque forte de chefe tem aviso (brilho, linha ou som). Observe e desvie!': 'Every strong boss attack is telegraphed (glow, line or sound). Watch and dodge!',
+    'Mire para cima e na diagonal contra drones e chefes voadores.': 'Aim up and diagonally at drones and flying bosses.'
   }
 };
 
@@ -426,6 +538,13 @@ const Music = {
 /* ============================ View / Render ============================ */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d', { alpha: false });
+// toda escrita no canvas passa pelo tradutor
+{
+  const fT = ctx.fillText.bind(ctx), sT = ctx.strokeText.bind(ctx), mT = ctx.measureText.bind(ctx);
+  ctx.fillText = (t, x, y, m) => m === undefined ? fT(I18N.tr(t), x, y) : fT(I18N.tr(t), x, y, m);
+  ctx.strokeText = (t, x, y, m) => m === undefined ? sT(I18N.tr(t), x, y) : sT(I18N.tr(t), x, y, m);
+  ctx.measureText = (t) => mT(I18N.tr(t));
+}
 
 const View = {
   W: 1, H: 1, dpr: 1, scale: 1, viewW: 640, gx: 0, gy: 0, gw: 1, gh: 1, portrait: false,
@@ -3629,6 +3748,8 @@ const UI = {
       { name: 'full', x: rightEdge - tb * 3 - 16, y: ty, w: tb, h: tb }
     ];
     if (Platform.isCrazy()) this.top.pop();   // o portal já oferece tela cheia
+    const lastTop = this.top[this.top.length - 1];
+    this.top.push({ name: 'lang', x: lastTop.x - tb - 8, y: ty, w: tb, h: tb });   // troca PT / EN
   },
   hitTop(x, y) {
     for (const b of this.top) if (x >= b.x - 4 && x <= b.x + b.w + 4 && y >= b.y - 4 && y <= b.y + b.h + 4) return b.name;
@@ -3655,6 +3776,7 @@ const UI = {
     if (name === 'pause') { if (Game.isPlaying()) Game.setPaused(!Game.paused); }
     else if (name === 'mute') Game.toggleMute();
     else if (name === 'full') this.toggleFullscreen();
+    else if (name === 'lang') I18N.toggle();
   },
   toggleFullscreen() {
     try {
@@ -3701,10 +3823,10 @@ const UI = {
       ctx.font = 'bold 8px monospace'; ctx.fillStyle = '#ffd27a';
       ctx.fillText('METRALHADORA DUPLA', left, top + 21); ctx.fillText('∞', left + 110, top + 21);
       ctx.fillStyle = '#55ff9a'; ctx.fillText('MÍSSEIS', left, top + 34);
-      for (let i = 0; i < MC.missiles; i++) { ctx.fillStyle = i < m.missiles ? '#55ff9a' : '#1a2a2a'; ctx.fillRect(left + 40 + i * 7, top + 28, 5, 6); }
-      if (m.missiles < MC.missiles) { ctx.fillStyle = 'rgba(85,255,154,0.5)'; ctx.fillRect(left + 40 + m.missiles * 7, top + 34, 5 * (m.rechargeT / MC.missileRecharge), 1.5); }
+      for (let i = 0; i < MC.missiles; i++) { ctx.fillStyle = i < m.missiles ? '#55ff9a' : '#1a2a2a'; ctx.fillRect(left + 46 + i * 6, top + 28, 4, 6); }
+      if (m.missiles < MC.missiles) { ctx.fillStyle = 'rgba(85,255,154,0.5)'; ctx.fillRect(left + 46 + m.missiles * 6, top + 34, 4 * (m.rechargeT / MC.missileRecharge), 1.5); }
       const ready = p.dashCd <= 0;
-      ctx.fillStyle = ready ? '#3ff6ff' : '#5b7480'; ctx.fillText(ready ? 'INVESTIDA OK' : 'INVESTIDA', left + 100, top + 34);
+      ctx.fillStyle = ready ? '#3ff6ff' : '#5b7480'; ctx.fillText(ready ? 'INVESTIDA OK' : 'INVESTIDA', left + 98, top + 34);
       const low = m.armor <= 8 && Math.floor(t * 6) % 2 === 0;
       ctx.fillStyle = low ? '#ff4d6d' : '#ffb02e'; ctx.fillText('BLINDAGEM', left, top + 46);
       ctx.fillStyle = '#152430'; ctx.fillRect(left + 50, top + 40, 90, 6);
@@ -3788,10 +3910,11 @@ const UI = {
   phaseNames: ['', 'SELVA BIOLUMINESCENTE', 'RUÍNAS DA TORRE DE REDE', 'NÚCLEO SUBTERRÂNEO'],
   menuItems() {
     const st = Game.state, rec = Save.data.recordes, cf = Save.data.config;
-    if (st === 'options') return { y: 104, w: 300, items: [
+    if (st === 'options') return { y: 98, w: 300, items: [
       { id: 'opt_fx', label: 'EFEITOS REDUZIDOS: ' + (cf.efeitosReduzidos ? 'SIM' : 'NÃO'), sub: 'Menos partículas, sem tremor e resolução menor', color: '#ffb02e' },
       { id: 'opt_music', label: 'MÚSICA: ' + (cf.musica === false ? 'DESLIGADA' : 'LIGADA'), color: '#c07bff' },
       { id: 'opt_mute', label: 'SOM: ' + (cf.mudo ? 'MUDO' : 'LIGADO'), color: '#3ff6ff' },
+      { id: 'opt_lang', label: 'IDIOMA / LANGUAGE: ' + (I18N.lang === 'en' ? 'ENGLISH' : 'PORTUGUÊS'), color: '#55ff9a' },
       { id: 'opt_back', label: 'VOLTAR', w: 160, h: 28 }
     ] };
     if (Game.paused) return { y: 158, items: [{ id: 'resume', label: 'CONTINUAR' }, { id: 'options', label: 'OPÇÕES', color: '#ffb02e' }, { id: 'tomenu', label: 'MENU PRINCIPAL' }] };
@@ -3845,6 +3968,7 @@ const UI = {
     else if (id === 'opt_fx') { Save.data.config.efeitosReduzidos = !Save.data.config.efeitosReduzidos; Save.write(); View.resize(); }
     else if (id === 'opt_music') { Save.data.config.musica = Save.data.config.musica === false; Save.write(); Music.refresh(); }
     else if (id === 'opt_mute') Game.toggleMute();
+    else if (id === 'opt_lang' || id === 'lang') I18N.toggle();
     else if (id === 'back') Game.goto('menu');
     else if (id.startsWith('d_')) { Game.diffKey = id.slice(2); Game.startRun(Game.pendingPhase); }
     else if (id === 'resume') Game.setPaused(false);
@@ -4147,7 +4271,10 @@ const UI = {
     const cx = b.x + b.w / 2, cy = b.y + b.h / 2, s = b.w * 0.26;
     ctx.save(); ctx.translate(cx, cy);
     ctx.strokeStyle = '#bffcff'; ctx.fillStyle = '#bffcff'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    if (b.name === 'pause') {
+    if (b.name === 'lang') {
+      ctx.font = `bold ${Math.round(b.w * 0.34)}px monospace`; ctx.textAlign = 'center'; ctx.fillStyle = '#bffcff';
+      ctx.fillText(I18N.lang === 'en' ? 'EN' : 'PT', 0, b.h * 0.12);
+    } else if (b.name === 'pause') {
       if (Game.paused) { ctx.beginPath(); ctx.moveTo(-s * 0.6, -s); ctx.lineTo(s, 0); ctx.lineTo(-s * 0.6, s); ctx.closePath(); ctx.fill(); }
       else { ctx.fillRect(-s * 0.75, -s, s * 0.5, s * 2); ctx.fillRect(s * 0.25, -s, s * 0.5, s * 2); }
     } else if (b.name === 'mute') {
@@ -4270,6 +4397,7 @@ function frame(now) {
 
 /* ============================ Boot ============================ */
 Save.load();
+I18N.init();
 Audio.muted = !!Save.data.config.mudo;
 Pools.init();
 Level.build(1);
@@ -4279,7 +4407,8 @@ View.resize();
 window.__BION_UI = UI;
 window.__BION_MUSIC = Music;
 Music.play('menu');
-Platform.init().then(() => { if (Platform.ready) { Save.load(); Audio.setMuted(!!Save.data.config.mudo); View.resize(); } });
+Platform.init().then(() => { if (Platform.ready) { Save.load(); I18N.init(); Audio.setMuted(!!Save.data.config.mudo); View.resize(); } });
+window.__BION_I18N = I18N;
 window.__BION_PLATFORM = Platform;
 requestAnimationFrame(frame);
 window.__BION = { Game, Player, Enemies, Input, View, CONFIG, Pools };
