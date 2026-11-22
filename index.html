@@ -42,15 +42,15 @@
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v0.6.0',
+  version: 'v1.0.0',
   phasesAvailable: 3,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
-  render: { maxDpr: 2, maxBgRes: 3 },
+  render: { maxDpr: 2, maxBgRes: 3, reducedDpr: 1.25 },
   // Dificuldade atual (seleção chega na Etapa 3). Etapa 1 usa "veterano".
   difficulty: {
-    recruta:    { hp: 8, speedMul: 0.85, fireMul: 0.70, scoreMul: 1 },
-    veterano:   { hp: 5, speedMul: 1.00, fireMul: 1.00, scoreMul: 1 },
-    sobrecarga: { hp: 3, speedMul: 1.20, fireMul: 1.30, scoreMul: 2 }
+    recruta:    { hp: 8, speedMul: 0.85, fireMul: 0.70, scoreMul: 1, enemyHpMul: 1.0,  bossHpMul: 0.8,  startBombs: 12 },
+    veterano:   { hp: 5, speedMul: 1.00, fireMul: 1.00, scoreMul: 1, enemyHpMul: 1.0,  bossHpMul: 1.0,  startBombs: 10 },
+    sobrecarga: { hp: 3, speedMul: 1.20, fireMul: 1.30, scoreMul: 2, enemyHpMul: 1.25, bossHpMul: 1.25, startBombs: 8 }
   },
   defaultDifficulty: 'veterano',
   player: {
@@ -118,8 +118,8 @@ const CONFIG = {
   },
   enemyBulletDmg: 1,
   input: { deadzone: 0.28, btnMin: 64, btnMax: 86, topBtn: 42 },
-  fx: { maxParticles: 300, maxBullets: 220, hitStop: 0.04, shakeMax: 8 },
-  audio: { master: 0.8, sfx: 0.55, maxVoices: 14 },
+  fx: { reducedParticles: 110, maxParticles: 300, maxBullets: 220, hitStop: 0.04, shakeMax: 8 },
+  audio: { master: 0.8, sfx: 0.55, music: 0.32, maxVoices: 14 },   // música mais baixa que os efeitos
   camera: { lead: 0.38 }
 };
 
@@ -146,7 +146,7 @@ const Save = {
   KEY: 'bion07_protocolo_verde_v1',
   data: null,
   defaults() {
-    return { versao: 1, perfil: { id: 'local', nome: 'Jogador' }, recordes: { recruta: 0, veterano: 0, sobrecarga: 0 }, progresso: { faseDesbloqueada: 1 }, config: { mudo: false } };
+    return { versao: 1, perfil: { id: 'local', nome: 'Jogador' }, recordes: { recruta: 0, veterano: 0, sobrecarga: 0 }, progresso: { faseDesbloqueada: 1 }, config: { mudo: false, musica: true, efeitosReduzidos: false } };
   },
   load() {
     this.data = this.defaults();
@@ -173,6 +173,7 @@ const Audio = {
   ctx: null, master: null, sfx: null, noiseBuf: null, voices: 0, muted: false, last: {},
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') { try { this.ctx.resume(); } catch (e) {} } return; }
+    setTimeout(() => { if (Music.want) { const w = Music.want; Music.want = null; Music.play(w); } }, 0);
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) return;
@@ -266,6 +267,88 @@ const Audio = {
   }
 };
 
+/* ============================ Música (synthwave procedural) ============================ */
+const Music = {
+  want: null, gain: null, step: 0, nextT: 0, timer: null, paused: false, arpI: 0,
+  // padrões de 16 passos: x = toca, . = silêncio, o = oitava acima (baixo)
+  defs: {
+    menu:     { bpm: 92,  key: 57, prog: [[0, 'm'], [-4, 'M'], [3, 'M'], [-2, 'M']], kick: '................', snare: '................', hat: '................', bass: 'x.......x.......', arp: 'x...x...x...x...', arpWave: 'triangle', arpCut: 2400, pad: true },
+    1:        { bpm: 100, key: 57, prog: [[0, 'm'], [-4, 'M'], [3, 'M'], [-2, 'M']], kick: 'x.........x.....', snare: '........x.......', hat: '..x...x...x...x.', bass: 'x...x.o.x...x.o.', arp: 'x.x.x.x.x.x.x.x.', arpWave: 'triangle', arpCut: 2600, pad: true },
+    2:        { bpm: 118, key: 50, prog: [[0, 'm'], [-4, 'M'], [3, 'M'], [-2, 'M']], kick: 'x...x...x...x...', snare: '....x.......x...', hat: '..x...x...x...x.', bass: 'x.o.x.o.x.o.x.o.', arp: 'x.xxx.xxx.xxx.xx', arpWave: 'square', arpCut: 1800, pad: true },
+    3:        { bpm: 124, key: 52, prog: [[0, 'm'], [-4, 'M'], [5, 'm'], [7, 'M']], kick: 'x...x...x...x...', snare: '....x.......x..x', hat: 'xxxxxxxxxxxxxxxx', bass: 'xxoxxxoxxxoxxxox', arp: 'x.x.xx.xx.x.xx.x', arpWave: 'sawtooth', arpCut: 1500, pad: true },
+    boss:     { bpm: 140, key: 49, prog: [[0, 'm'], [-4, 'M'], [3, 'M'], [-2, 'M']], kick: 'x...x...x...x...', snare: '....x.......x.x.', hat: 'xxxxxxxxxxxxxxxx', bass: 'xoxoxoxoxoxoxoxo', arp: 'xxxxxxxxxxxxxxxx', arpWave: 'sawtooth', arpCut: 2200, pad: false }
+  },
+  enabled() { return Save.data.config.musica !== false; },
+  ensure() {
+    const c = Audio.ctx;
+    if (!c) return false;
+    if (!this.gain) { this.gain = c.createGain(); this.gain.gain.value = 0; this.gain.connect(Audio.master); this.refresh(); }
+    if (!this.timer) this.timer = setInterval(() => this.tick(), 30);
+    return true;
+  },
+  play(id) {
+    if (this.want === id) return;
+    this.want = id; this.step = 0; this.arpI = 0;
+    if (this.ensure()) this.nextT = Audio.ctx.currentTime + 0.1;
+  },
+  stop() { this.want = null; },
+  setPaused(v) { this.paused = v; this.refresh(); },
+  refresh() {
+    if (!this.gain || !Audio.ctx) return;
+    const v = (this.paused || !this.enabled()) ? 0 : CONFIG.audio.music;
+    this.gain.gain.setTargetAtTime(v, Audio.ctx.currentTime, 0.12);
+  },
+  tick() {
+    const c = Audio.ctx;
+    if (!c || !this.want || c.state !== 'running' || Audio.muted || !this.enabled()) { if (c) this.nextT = c.currentTime + 0.05; return; }
+    const d = this.defs[this.want];
+    if (!d) return;
+    const sd = 60 / d.bpm / 4;
+    if (this.nextT < c.currentTime) this.nextT = c.currentTime + 0.02;
+    while (this.nextT < c.currentTime + 0.15) {
+      this.schedule(d, this.step, this.nextT, sd);
+      this.step = (this.step + 1) % (16 * d.prog.length);
+      this.nextT += sd;
+    }
+  },
+  freq(m) { return 440 * Math.pow(2, (m - 69) / 12); },
+  osc(type, f, t, dur, vol, cut, attack = 0.005) {
+    const c = Audio.ctx, o = c.createOscillator(), g = c.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + attack); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    let out = o;
+    if (cut) { const fl = c.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = cut; o.connect(fl); out = fl; }
+    out.connect(g); g.connect(this.gain);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+  noise(t, dur, vol, type, f) {
+    const c = Audio.ctx, s = c.createBufferSource(), fl = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = Audio.noiseBuf; fl.type = type; fl.frequency.value = f;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(fl); fl.connect(g); g.connect(this.gain);
+    s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.02);
+  },
+  schedule(d, step, t, sd) {
+    const c = Audio.ctx, s = step % 16, ch = d.prog[Math.floor(step / 16)];
+    const root = d.key + ch[0], tones = [0, ch[1] === 'm' ? 3 : 4, 7];
+    if (d.kick[s] === 'x') {
+      const o = c.createOscillator(), g = c.createGain();
+      o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+      g.gain.setValueAtTime(0.55, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+      o.connect(g); g.connect(this.gain); o.start(t); o.stop(t + 0.2);
+    }
+    if (d.snare[s] === 'x') { this.noise(t, 0.13, 0.22, 'bandpass', 1800); this.osc('triangle', 190, t, 0.08, 0.08); }
+    if (d.hat[s] === 'x') this.noise(t, 0.035, s % 2 ? 0.05 : 0.07, 'highpass', 7500);
+    if (d.bass[s] !== '.') this.osc('sawtooth', this.freq(root - 24 + (d.bass[s] === 'o' ? 12 : 0)), t, sd * 1.7, 0.16, 700);
+    if (d.arp[s] === 'x') {
+      const i = this.arpI++;
+      const m = root + 12 + tones[i % 3] + 12 * (Math.floor(i / 3) % 2);
+      this.osc(d.arpWave, this.freq(m), t, sd * 1.2, d.arpWave === 'triangle' ? 0.07 : 0.035, d.arpCut);
+    }
+    if (d.pad && s === 0) for (const tn of tones) this.osc('sawtooth', this.freq(root + tn), t, sd * 16, 0.022, 1300, 0.6);
+  }
+};
+
 /* ============================ View / Render ============================ */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d', { alpha: false });
@@ -284,7 +367,7 @@ const View = {
     const W = Math.max(1, Math.round(vv ? vv.width : window.innerWidth));
     const H = Math.max(1, Math.round(vv ? vv.height : window.innerHeight));
     this.W = W; this.H = H;
-    this.dpr = Math.min(CONFIG.render.maxDpr, window.devicePixelRatio || 1);
+    this.dpr = Math.min(FX.reduced() ? CONFIG.render.reducedDpr : CONFIG.render.maxDpr, window.devicePixelRatio || 1);
     canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
     canvas.width = Math.round(W * this.dpr); canvas.height = Math.round(H * this.dpr);
     this.readSafe();
@@ -585,7 +668,9 @@ const Render = {
   drawFlies(camX, t) {
     const TW = this.TW;
     ctx.globalCompositeOperation = 'lighter';
-    for (const f of this.flies) {
+    const red = FX.reduced();
+    for (let i = 0; i < this.flies.length; i += red ? 3 : 1) {
+      const f = this.flies[i];
       let x = (f.x - camX * f.f) % TW; if (x < 0) x += TW;
       x += Math.sin(t * 0.7 + f.ph) * 10;
       if (x > View.viewW + 5) continue;
@@ -708,7 +793,9 @@ const Pools = {
     }
     return null;
   },
+  live: 0,
   particle(props) {
+    if (FX.reduced() && props.kind !== 'flash' && props.kind !== 'ring' && (Math.random() < 0.55 || this.live > CONFIG.fx.reducedParticles)) return null;
     const arr = this.particles, n = arr.length;
     for (let k = 0; k < n; k++) {
       const i = (this.pCursor + k) % n;
@@ -741,9 +828,12 @@ const FX = {
   dust(x, y, n = 5) {
     for (let i = 0; i < n; i++) Pools.particle({ x: x + Util.rand(-6, 6), y, vx: Util.rand(-50, 50), vy: Util.rand(-40, -10), life: 0.35, color: 'rgba(120,200,190,1)', size: 2 + Math.random() * 2, kind: 'smoke', add: false, drag: 4 });
   },
+  reduced() { return !!(Save.data && Save.data.config.efeitosReduzidos); },
   update(dt) {
+    let live = 0;
     for (const p of Pools.particles) {
       if (!p.on) continue;
+      live++;
       p.life -= dt;
       if (p.life <= 0) { p.on = false; continue; }
       if (p.drag) { const k = Math.max(0, 1 - p.drag * dt); p.vx *= k; p.vy *= k; }
@@ -751,6 +841,7 @@ const FX = {
       p.x += p.vx * dt; p.y += p.vy * dt;
       if (p.grow) p.size += p.grow * dt;
     }
+    Pools.live = live;
   },
   draw() {
     // fumaça (normal) primeiro, depois brilhos (aditivo)
@@ -796,7 +887,7 @@ const Player = {
       maxHp: Game.diff.hp, hp: Game.diff.hp, invuln: 0, dashT: 0, dashInv: 0, dashCd: 0, dashDir: 1, dashAir: false,
       coyote: 0, jumpBuf: 0, jumpCutDone: true, crouch: false, aimA: 0, fireCd: 0, muzzle: 0,
       runPhase: 0, drop: 0, ghostT: 0, dead: false, weapon: 'pulse', ammo: Infinity,
-      bombs: CONFIG.bombs.start, bombCd: 0, knifeCd: 0, knifeT: 0, mech: null, enterCd: 0, safe: null, groundRef: null
+      bombs: Game.diff.startBombs || CONFIG.bombs.start, bombCd: 0, knifeCd: 0, knifeT: 0, mech: null, enterCd: 0, safe: null, groundRef: null
     });
   },
   hurt(dmg, srcX) {
@@ -1308,7 +1399,7 @@ const Enemies = {
   list: [],
   create(type, x, y) {
     const c = CONFIG.enemies[type];
-    const e = { type, x, y, vx: 0, vy: 0, w: c.w, h: c.h, hp: c.hp, flameCd: 0, aimA: Math.PI, burstLeft: 0, shotT: 0, facing: -1, flash: 0, state: 'idle', t: 0, fireT: c.fireRate ? c.fireRate * 0.7 : 0, onGround: false, dead: false, anim: Math.random() * 6, patrolDir: -1, patrolT: 1 + Math.random() * 2, tele: 0 };
+    const e = { type, x, y, vx: 0, vy: 0, w: c.w, h: c.h, hp: Math.ceil(c.hp * Game.diff.enemyHpMul), flameCd: 0, aimA: Math.PI, burstLeft: 0, shotT: 0, facing: -1, flash: 0, state: 'idle', t: 0, fireT: c.fireRate ? c.fireRate * 0.7 : 0, onGround: false, dead: false, anim: Math.random() * 6, patrolDir: -1, patrolT: 1 + Math.random() * 2, tele: 0 };
     this.list.push(e);
     return e;
   },
@@ -1919,7 +2010,7 @@ const Boss = {
     if (kind === 'overlord') { this.spawnOverlord(x); return; }
     const C = CONFIG.boss;
     Object.assign(this, {
-      kind: 'sentinela', score: C.score, active: true, dying: false, x, y: -80, vx: 0, vy: 0, w: C.w, h: C.h, hp: C.hp, maxHp: C.hp, name: C.name,
+      kind: 'sentinela', score: C.score, active: true, dying: false, x, y: -80, vx: 0, vy: 0, w: C.w, h: C.h, hp: Math.round(C.hp * Game.diff.bossHpMul), maxHp: Math.round(C.hp * Game.diff.bossHpMul), name: C.name,
       facing: -1, state: 'intro', t: 0, flash: 0, flameCd: 0, last: null, shots: 0, shotT: 0, burstY: C.burst.highY,
       anim: 0, deathT: 0, expT: 0, introLanded: false, onGround: false
     });
@@ -1945,7 +2036,7 @@ const Boss = {
     const C = CONFIG.overlord;
     Object.assign(this, {
       kind: 'overlord', active: true, dying: false, x, y: CONFIG.world.groundY, vx: 0, vy: 0, w: C.w, h: C.h,
-      hp: C.hp, maxHp: C.hp, name: C.name, score: C.score, facing: -1, state: 'intro', t: 1.8, flash: 0, flameCd: 0,
+      hp: Math.round(C.hp * Game.diff.bossHpMul), maxHp: Math.round(C.hp * Game.diff.bossHpMul), name: C.name, score: C.score, facing: -1, state: 'intro', t: 1.8, flash: 0, flameCd: 0,
       last: null, shots: 0, shotT: 0, anim: 0, deathT: 0, expT: 0, overload: false, summonT: 0, shakeT: 0,
       fist: { x: x - 70, y: CONFIG.world.groundY - 40 }, punchX: x - 200
     });
@@ -2145,7 +2236,7 @@ const Boss = {
     const C = CONFIG.vortex;
     Object.assign(this, {
       kind: 'vortex', active: true, dying: false, x: Level.arenaEnd + 90, y: C.flyY, vx: 0, vy: 0, w: C.w, h: C.h,
-      hp: C.hp, maxHp: C.hp, name: C.name, score: C.score, facing: -1, state: 'intro', t: 0, flash: 0, flameCd: 0,
+      hp: Math.round(C.hp * Game.diff.bossHpMul), maxHp: Math.round(C.hp * Game.diff.bossHpMul), name: C.name, score: C.score, facing: -1, state: 'intro', t: 0, flash: 0, flameCd: 0,
       last: null, shots: 0, shotT: 0, anim: 0, deathT: 0, expT: 0, targetX: x, rayX: x, patrolDir: -1
     });
     this.shells = []; this.waves = []; this.mines = [];
@@ -3143,12 +3234,12 @@ const Game = {
   stats: { kills: 0, allies: 0, maxCombo: 0, time: 0 },
   diffKey: CONFIG.defaultDifficulty, diff: CONFIG.difficulty[CONFIG.defaultDifficulty],
   levelTime: 0, phase: 1, pendingPhase: 1, cpIdx: 0, arena: false, bossDone: false, introT: 0, clearT: 0,
-  menuSel: 0, newRecord: false, phaseStats: null,
-  inMenu() { return this.state === 'menu' || this.state === 'diff' || this.state === 'howto'; },
-  isOverlayMenu() { return this.inMenu() || this.state === 'result' || this.state === 'next' || this.state === 'gameover' || this.state === 'victory' || this.paused; },
+  menuSel: 0, newRecord: false, phaseStats: null, optionsFrom: 'menu', howtoPage: 0,
+  inMenu() { return this.state === 'menu' || this.state === 'diff' || this.state === 'howto' || (this.state === 'options' && this.optionsFrom === 'menu'); },
+  isOverlayMenu() { return this.inMenu() || this.state === 'result' || this.state === 'next' || this.state === 'gameover' || this.state === 'victory' || this.state === 'options' || this.paused; },
   isPlaying() { return this.state === 'play' || this.state === 'dead' || this.state === 'clear'; },
   goto(state) { this.state = state; this.menuSel = 0; Input.clear(); },
-  toMenu() { this.paused = false; Boss.reset(); this.clearWorld(); Level.build(1); this.goto('menu'); },
+  toMenu() { this.paused = false; Music.setPaused(false); Music.play('menu'); Boss.reset(); this.clearWorld(); Level.build(1); this.goto('menu'); },
   // passa para a próxima fase mantendo pontos, vidas, arma e bombas
   nextPhase() {
     const keep = { weapon: Player.weapon, ammo: Player.ammo, bombs: Player.bombs };
@@ -3177,7 +3268,8 @@ const Game = {
     this.camX = 0; this.spawnIdx = 0; this.levelTime = 0;
     this.phaseStart = { kills: this.stats.kills, allies: this.stats.allies, time: this.stats.time }; this.phaseMaxCombo = 0;
     Player.reset(Level.checkpoints[0].x, CONFIG.world.groundY);
-    this.paused = false;
+    this.paused = false; Music.setPaused(false);
+    Music.play(phase);
     this.goto('intro'); this.introT = 2.6;
     Audio.play('start');
   },
@@ -3186,6 +3278,7 @@ const Game = {
     Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = []; MechUnits.list = []; Missiles.list = [];
     Pools.clearBullets(); Boss.reset(); Level.openGate();
     this.arena = false; this.combo = 0; this.comboT = 0;
+    Music.play(this.phase);
     this.camX = Math.max(0, cp.x - View.viewW * CONFIG.camera.lead);
     this.spawnIdx = Level.spawns.findIndex(s => s.x >= this.camX - 20);
     if (this.spawnIdx < 0) this.spawnIdx = Level.spawns.length;
@@ -3199,12 +3292,14 @@ const Game = {
     for (const e of Enemies.list) if (!e.dead) FX.explosion(e.x, e.y - e.h / 2, 0.6);
     Enemies.list = []; Pools.clearBullets('e');
     Level.closeGate();
+    Music.play('boss');
     Boss.spawn(Level.bossKind === 'vortex' ? (Level.arenaX + Level.arenaEnd) / 2 : (Level.bossKind === 'overlord' ? Level.arenaEnd - 75 : Level.arenaEnd - 110), Level.bossKind);
     this.showBanner('ALERTA!', Boss.name + ' DETECTADA', '#ff2a6d');
     Audio.play('warn');
   },
   bossDefeated(x, y) {
     this.bossDone = true;
+    Music.stop();
     this.addScore(Boss.score, x, y);
     this.showBanner(Boss.kind === 'overlord' ? 'NÚCLEO DESTRUÍDO!' : 'SETOR LIMPO!', Boss.name + (Boss.kind === 'sentinela' ? ' DESTRUÍDA' : ' DESTRUÍDO'), '#55ff9a');
     Player.invuln = 99;
@@ -3229,10 +3324,12 @@ const Game = {
   gameOver() {
     this.newRecord = false;
     this.saveRecord();
+    Music.stop();
     Audio.play('gameover');
     this.goto('gameover');
   },
   addShake(amp, dur) {
+    if (FX.reduced()) return;   // efeitos reduzidos: sem tremor
     amp = Math.min(amp, CONFIG.fx.shakeMax);
     if (amp >= this.shakeAmp * (this.shakeT / (this.shakeDur || 1))) { this.shakeAmp = amp; this.shakeT = dur; this.shakeDur = dur; }
   },
@@ -3277,6 +3374,7 @@ const Game = {
     if (this.paused === v) return;
     this.paused = v; this.menuSel = 0;
     Input.clear();
+    Music.setPaused(v);
     if (!v) Audio.init();
   },
   toggleMute() {
@@ -3603,13 +3701,20 @@ const UI = {
   // ---------- Menus (coordenadas do mundo)
   phaseNames: ['', 'SELVA BIOLUMINESCENTE', 'RUÍNAS DA TORRE DE REDE', 'NÚCLEO SUBTERRÂNEO'],
   menuItems() {
-    const st = Game.state, rec = Save.data.recordes;
-    if (Game.paused) return { y: 170, items: [{ id: 'resume', label: 'CONTINUAR' }, { id: 'tomenu', label: 'MENU PRINCIPAL' }] };
+    const st = Game.state, rec = Save.data.recordes, cf = Save.data.config;
+    if (st === 'options') return { y: 104, w: 300, items: [
+      { id: 'opt_fx', label: 'EFEITOS REDUZIDOS: ' + (cf.efeitosReduzidos ? 'SIM' : 'NÃO'), sub: 'Menos partículas, sem tremor e resolução menor', color: '#ffb02e' },
+      { id: 'opt_music', label: 'MÚSICA: ' + (cf.musica === false ? 'DESLIGADA' : 'LIGADA'), color: '#c07bff' },
+      { id: 'opt_mute', label: 'SOM: ' + (cf.mudo ? 'MUDO' : 'LIGADO'), color: '#3ff6ff' },
+      { id: 'opt_back', label: 'VOLTAR', w: 160, h: 28 }
+    ] };
+    if (Game.paused) return { y: 158, items: [{ id: 'resume', label: 'CONTINUAR' }, { id: 'options', label: 'OPÇÕES', color: '#ffb02e' }, { id: 'tomenu', label: 'MENU PRINCIPAL' }] };
     if (st === 'menu') {
       const it = [{ id: 'play', label: 'JOGAR', color: '#55ff9a' }];
       if (Save.data.progresso.faseDesbloqueada > 1) it.push({ id: 'continue', label: 'CONTINUAR', sub: 'SETOR ' + Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable) });
       it.push({ id: 'howto', label: 'COMO JOGAR', color: '#c07bff' });
-      return { y: 196, items: it };
+      it.push({ id: 'options', label: 'OPÇÕES', color: '#ffb02e', h: 26 });
+      return { y: it.length > 3 && it[1].sub ? 186 : 192, items: it };
     }
     if (st === 'diff') return { y: 96, w: 310, items: [
       { id: 'd_recruta', label: 'RECRUTA', sub: 'Vida 8 · inimigos 85% · cadência 70% · x1   Recorde ' + rec.recruta, color: '#55ff9a', h: 42 },
@@ -3617,7 +3722,7 @@ const UI = {
       { id: 'd_sobrecarga', label: 'SOBRECARGA', sub: 'Vida 3 · inimigos 120% · cadência 130% · x2   Recorde ' + rec.sobrecarga, color: '#ff4d6d', h: 42 },
       { id: 'back', label: 'VOLTAR', w: 160, h: 28 }
     ] };
-    if (st === 'howto') return { y: 318, items: [{ id: 'back', label: 'VOLTAR', h: 28 }] };
+    if (st === 'howto') return { y: 296, items: [Game.howtoPage === 0 ? { id: 'howto_next', label: 'PRÓXIMA PÁGINA', h: 24, color: '#c07bff' } : { id: 'howto_prev', label: 'PÁGINA ANTERIOR', h: 24, color: '#c07bff' }, { id: 'back', label: 'VOLTAR', h: 24 }] };
     if (st === 'result') return { y: 300, items: [{ id: 'next', label: Game.phase < CONFIG.phasesAvailable ? 'PRÓXIMO SETOR' : 'CONTINUAR', color: '#55ff9a' }] };
     if (st === 'next') return { y: 250, items: [{ id: 'tomenu', label: 'MENU PRINCIPAL' }] };
     if (st === 'victory') return { y: 306, items: [{ id: 'tomenu', label: 'MENU PRINCIPAL', color: '#55ff9a' }] };
@@ -3639,7 +3744,14 @@ const UI = {
     Audio.init(); Audio.play('ui');
     if (id === 'play') { Game.pendingPhase = 1; Game.goto('diff'); Game.menuSel = 1; }
     else if (id === 'continue') { Game.pendingPhase = Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable); Game.goto('diff'); Game.menuSel = 1; }
-    else if (id === 'howto') Game.goto('howto');
+    else if (id === 'howto') { Game.howtoPage = 0; Game.goto('howto'); }
+    else if (id === 'howto_next') { Game.howtoPage = 1; }
+    else if (id === 'howto_prev') { Game.howtoPage = 0; }
+    else if (id === 'options') { Game.optionsFrom = Game.paused ? 'pause' : 'menu'; Game.optionsPrev = Game.state; Game.goto('options'); }
+    else if (id === 'opt_back') { Game.state = Game.optionsFrom === 'pause' ? Game.optionsPrev : 'menu'; Game.menuSel = 0; Input.clear(); }
+    else if (id === 'opt_fx') { Save.data.config.efeitosReduzidos = !Save.data.config.efeitosReduzidos; Save.write(); View.resize(); }
+    else if (id === 'opt_music') { Save.data.config.musica = Save.data.config.musica === false; Save.write(); Music.refresh(); }
+    else if (id === 'opt_mute') Game.toggleMute();
     else if (id === 'back') Game.goto('menu');
     else if (id.startsWith('d_')) { Game.diffKey = id.slice(2); Game.startRun(Game.pendingPhase); }
     else if (id === 'resume') Game.setPaused(false);
@@ -3661,6 +3773,7 @@ const UI = {
     else if (code === 'ArrowDown' || code === 'KeyS') { Game.menuSel = (Game.menuSel + 1) % rects.length; Audio.play('select'); }
     else if (['Enter', 'Space', 'KeyJ', 'KeyZ', 'KeyK', 'KeyX'].includes(code)) { const r = rects[Math.min(Game.menuSel, rects.length - 1)]; this.activate(r.id); }
     else if (code === 'Escape' && (Game.state === 'diff' || Game.state === 'howto')) this.activate('back');
+    else if (code === 'Escape' && Game.state === 'options') this.activate('opt_back');
   },
   drawMenu(t) {
     const rects = this.menuRects();
@@ -3703,27 +3816,69 @@ const UI = {
       ctx.font = '9px monospace'; ctx.fillStyle = '#88a8b8'; ctx.textAlign = 'center';
       ctx.fillText('SETOR ' + Game.pendingPhase + ' — ' + this.phaseNames[Game.pendingPhase], cx, 80);
       this.drawMenu(t); this.version();
+    } else if (st === 'options') {
+      this.veil(Game.optionsFrom === 'menu' ? 0.75 : 0.82);
+      this.neonText('OPÇÕES', cx, 70, 24, '#e9fff3', '#ffb02e');
+      ctx.font = '8px monospace'; ctx.fillStyle = '#88a8b8'; ctx.textAlign = 'center';
+      ctx.fillText('As opções ficam salvas neste aparelho.', cx, 88);
+      this.drawMenu(t); this.version();
     } else if (st === 'howto') {
-      this.veil(0.82);
-      this.neonText('COMO JOGAR', cx, 40, 20, '#e9fff3', '#c07bff');
-      const lines = [
-        ['OBJETIVO', 'Atravesse o setor, liberte aliados e destrua o chefe.'],
-        ['TOQUE', 'Direcional: andar · cima/diagonal: mirar · baixo: agachar (no ar: mirar p/ baixo)'],
-        ['', 'TIRO (segure = automático; perto do alvo vira FACA) · PULO (segure = mais alto)'],
-        ['', 'BOMBA: arremesso que quica e explode · DASH: impulso invulnerável'],
-        ['TECLADO', 'WASD/Setas mover · J/Z tiro · K/X/Espaço pulo · L/C bomba · Shift dash'],
-        ['', 'P/Esc pausa · M mudo · BAIXO+PULO desce de plataformas'],
-        ['ITENS', 'S=Spread L=Laser F=Flame M=Munição B=Bombas +=Reparo'],
-        ['COMBO', 'Abates em até 2,5 s aumentam o combo: x2 (5) x3 (10) x4 (20) x5 (30)'],
-        ['VIDAS', 'Barra de vida + 3 vidas extras. Ao cair, volta ao último checkpoint.']
-      ];
-      ctx.textAlign = 'left';
-      const small = View.viewW < 600;
-      let y = 70; const lx = Math.max(10, cx - 250), tx = lx + (small ? 46 : 62);
-      for (const [h, txt] of lines) {
-        if (h) { ctx.font = `bold ${small ? 7.5 : 9}px monospace`; ctx.fillStyle = '#55ff9a'; ctx.fillText(h, lx, y); }
-        ctx.font = `${small ? 7 : 8.5}px monospace`; ctx.fillStyle = '#cfe6f0'; ctx.fillText(txt, tx, y);
-        y += 26;
+      this.veil(0.86);
+      const page = Game.howtoPage;
+      this.neonText(page === 0 ? 'COMO JOGAR — CONTROLES' : 'COMO JOGAR — REGRAS', cx, 34, 17, '#e9fff3', '#c07bff');
+      ctx.font = '8px monospace'; ctx.fillStyle = '#7f97a6'; ctx.textAlign = 'center'; ctx.fillText('Página ' + (page + 1) + ' de 2', cx, 47);
+      const small = View.viewW < 600, lx = Math.max(10, cx - 230);
+      const head = (txt, x, y, col) => { ctx.font = `bold ${small ? 8 : 9}px monospace`; ctx.textAlign = 'left'; ctx.fillStyle = col || '#55ff9a'; ctx.fillText(txt, x, y); };
+      const line = (txt, x, y) => { ctx.font = `${small ? 7 : 8}px monospace`; ctx.textAlign = 'left'; ctx.fillStyle = '#cfe6f0'; ctx.fillText(txt, x, y); };
+      if (page === 0) {
+        // mini esquema do celular
+        const px = lx, py = 60, pw = 190, ph = 108;
+        ctx.strokeStyle = 'rgba(63,246,255,0.5)'; ctx.lineWidth = 1.2; Util.rr(ctx, px, py, pw, ph, 10); ctx.stroke();
+        ctx.fillStyle = 'rgba(10,30,40,0.6)'; Util.rr(ctx, px, py, pw, ph, 10); ctx.fill();
+        ctx.strokeStyle = 'rgba(63,246,255,0.6)'; ctx.beginPath(); ctx.arc(px + 34, py + 70, 22, 0, 6.28); ctx.stroke();
+        ctx.fillStyle = 'rgba(150,200,220,0.4)'; ctx.beginPath(); ctx.arc(px + 34, py + 70, 9, 0, 6.28); ctx.fill();
+        const bt = [['PULO', '#55ff9a', 168, 86], ['TIRO', '#ff4d6d', 140, 90], ['DASH', '#3ff6ff', 166, 58], ['BOMBA', '#ffb02e', 138, 60]];
+        for (const [n, c, bx, by] of bt) { ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(px + bx, py + by, 11, 0, 6.28); ctx.stroke(); ctx.font = 'bold 5px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = c; ctx.fillText(n, px + bx, py + by + 2); }
+        ctx.font = 'bold 6px monospace'; ctx.fillStyle = '#9fe9ff'; ctx.textAlign = 'center';
+        ctx.fillText('DIRECIONAL', px + 34, py + 100); ctx.fillText('TELA CHEIA · MUDO · PAUSA', px + 120, py + 14);
+        const tx = px + pw + 14;
+        head('TOQUE', tx, 66);
+        line('Direcional: andar · cima/diagonal: mirar', tx, 80);
+        line('Baixo: agachar · no ar: mirar para baixo', tx, 92);
+        line('TIRO: segure = automático', tx, 104);
+        line('Perto do alvo, TIRO vira FACA DE PLASMA', tx, 116);
+        line('PULO: segure = pulo mais alto', tx, 128);
+        line('BOMBA: arremesso que quica e explode', tx, 140);
+        line('DASH: impulso invulnerável (recarga 1,5 s)', tx, 152);
+        line('Deslize o dedo entre os botões sem soltar', tx, 164);
+        head('TECLADO', lx, 190);
+        line('WASD / Setas: mover, mirar, agachar      J ou Z: tiro / faca', lx, 204);
+        line('K, X ou Espaço: pulo      L ou C: bomba      Shift: dash', lx, 216);
+        line('P ou Esc: pausa      M: mudo      BAIXO + PULO: desce da plataforma', lx, 228);
+        head('MECHA BION-WALKER', lx, 252, '#ffb02e');
+        line('Encoste para entrar · TIRO: metralhadora · BOMBA: mísseis teleguiados', lx, 266);
+        line('DASH: investida · BAIXO + PULO: sair · blindagem zerada = ejeção', lx, 278);
+      } else {
+        // ícones dos itens
+        const items = [['S', '#ffb02e', 'SPREAD: leque de 5 tiros'], ['L', '#ff4dd2', 'LASER: atravessa inimigos'], ['F', '#ff7a1a', 'FLAME: jato que atinge grupos'],
+          ['M', '#3ff6ff', 'Munição / arma aleatória'], ['B', '#ffe27a', 'Bombas +5'], ['+', '#55ff9a', 'Reparo +2 de vida']];
+        head('ITENS', lx, 64);
+        items.forEach(([l, c, d], i) => {
+          const x = lx + (i % 2) * 230, y = 74 + Math.floor(i / 2) * 18;
+          ctx.fillStyle = '#0b1420'; Util.rr(ctx, x, y, 12, 12, 3); ctx.fill(); ctx.strokeStyle = c; ctx.lineWidth = 1.2; ctx.stroke();
+          ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = c; ctx.fillText(l, x + 6, y + 9.5);
+          line(d, x + 18, y + 9);
+        });
+        head('COMBO', lx, 142);
+        line('Abates em até 2,5 s aumentam o combo: x2 (5) · x3 (10) · x4 (20) · x5 (30)', lx, 155);
+        line('Levar dano zera o combo.', lx, 166);
+        head('VIDAS', lx, 186);
+        line('Barra de vida + 3 vidas extras. Ao zerar a barra, volta ao último checkpoint.', lx, 199);
+        line('Cair num poço tira 1 de vida e volta à última plataforma segura.', lx, 210);
+        head('PERIGOS E CHEFES', lx, 230, '#ff4d6d');
+        line('Lasers piscam em laranja antes de ligar. Liberte aliados das cápsulas.', lx, 243);
+        line('Todo ataque forte de chefe tem aviso (brilho, linha ou som). Observe e desvie!', lx, 254);
+        line('Mire para cima e na diagonal contra drones e chefes voadores.', lx, 265);
       }
       this.drawMenu(t);
     } else if (st === 'intro') {
@@ -3791,11 +3946,11 @@ const UI = {
       this.drawMenu(t);
     } else if (Game.paused) {
       this.veil(0.7);
-      this.neonText('PAUSADO', cx, 120, 34, '#e9fff3', '#3ff6ff');
+      this.neonText('PAUSADO', cx, 118, 34, '#e9fff3', '#3ff6ff');
       this.drawMenu(t);
       ctx.font = '9px monospace'; ctx.fillStyle = '#7f97a6'; ctx.textAlign = 'center';
-      ctx.fillText('Teclado: P/Esc continua · WASD/Setas mover · J/Z tiro', cx, 262);
-      ctx.fillText('K/Espaço pulo · L bomba · Shift dash · M mudo', cx, 275);
+      ctx.fillText('Teclado: P/Esc continua · WASD/Setas mover · J/Z tiro', cx, 290);
+      ctx.fillText('K/Espaço pulo · L bomba · Shift dash · M mudo', cx, 303);
       this.version();
     } else if (st === 'dead') {
       const a = Math.min(1, (1.8 - Game.deadT) * 2);
@@ -3993,7 +4148,7 @@ document.addEventListener('dblclick', e => e.preventDefault());
 document.addEventListener('selectstart', e => e.preventDefault());
 
 // pausa automática
-document.addEventListener('visibilitychange', () => { if (document.hidden) { Game.setPaused(true); Input.clear(); } });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { Game.setPaused(true); Input.clear(); try { if (Audio.ctx) Audio.ctx.suspend(); } catch (e) {} } });
 window.addEventListener('blur', () => { Game.setPaused(true); Input.clear(); });
 
 // redimensionamento
@@ -4024,6 +4179,8 @@ Input.clear();
 Player.reset(80, CONFIG.world.groundY);
 View.resize();
 window.__BION_UI = UI;
+window.__BION_MUSIC = Music;
+Music.play('menu');
 requestAnimationFrame(frame);
 window.__BION = { Game, Player, Enemies, Input, View, CONFIG, Pools };
 </script>
