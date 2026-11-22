@@ -50,7 +50,7 @@ const BION_PLATFORM = 'web';
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v1.2.0',
+  version: 'v1.2.1',
   phasesAvailable: 3,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
   render: { maxDpr: 2, maxBgRes: 3, reducedDpr: 1.25 },
@@ -249,7 +249,7 @@ const I18N = {
     'MECHA DESTRUÍDO': 'MECH DESTROYED', 'KAI-4 ejetado': 'KAI-4 ejected', 'MECHA PERDIDO': 'MECH LOST', 'Caiu no poço': 'Fell into the pit',
     '+1 VIDA': '+1 LIFE', 'Obrigado pelo apoio!': 'Thanks for your support!', 'ARMA ESPECIAL': 'SPECIAL WEAPON', 'MUNIÇÃO': 'AMMO', ' RECARREGADA': ' RELOADED',
     'BOMBAS +': 'BOMBS +', 'REPARO +': 'REPAIR +', 'BLINDAGEM +': 'ARMOR +', 'MUNIÇÃO ESGOTADA': 'OUT OF AMMO', '-1 VIDA': '-1 LIFE',
-    'REFORÇOS!': 'REINFORCEMENTS!', 'ANÚNCIO INDISPONÍVEL': 'AD UNAVAILABLE', 'Tente de novo em instantes': 'Try again shortly', 'AGACHE!': 'DUCK!', 'PULE!': 'JUMP!', 'ENTRAR': 'ENTER', 'Obrigado, KAI-4!': 'Thanks, KAI-4!',
+    'REFORÇOS!': 'REINFORCEMENTS!', 'ANÚNCIO INDISPONÍVEL': 'AD UNAVAILABLE', 'Tente de novo em instantes': 'Try again shortly', 'Continue do checkpoint': 'Continue from checkpoint', 'AGACHE!': 'DUCK!', 'PULE!': 'JUMP!', 'ENTRAR': 'ENTER', 'Obrigado, KAI-4!': 'Thanks, KAI-4!',
     // placas
     'MOVA-SE E ATIRE': 'MOVE AND SHOOT', 'Segure TIRO = automático': 'Hold FIRE = auto-fire', 'CIMA = mirar p/ cima': 'UP = aim up',
     'Diagonal = mirar na diagonal': 'Diagonal = aim diagonally', 'Segure PULO = mais alto': 'Hold JUMP = jump higher', 'BAIXO+PULO desce da plataforma': 'DOWN+JUMP drops through',
@@ -292,7 +292,8 @@ const I18N = {
 // Todas as chamadas viram "não faz nada" se o SDK não existir: o jogo nunca trava por causa dele.
 const Platform = {
   name: BION_PLATFORM, sdk: null, ready: false, inGameplay: false, adActive: false, installPrompt: null,
-  status: 'carregando', env: '?', debug: true,   // debug: mostra o estado do SDK na tela (desligar depois da aprovação)
+  status: 'carregando', env: '?', debug: false,   // true: mostra o estado do SDK na tela (diagnóstico)
+  adsDisabled: false,   // o portal recusou anúncios (ex.: fase Basic Launch): +1 VIDA fica grátis
   isCrazy() { return this.name === 'crazygames'; },
   call(fn) { try { return fn(); } catch (e) { return undefined; } },
   async init() {
@@ -362,12 +363,16 @@ const Platform = {
       this.sdk.ad.requestAd(type, {
         adStarted: () => { this.status = 'anúncio ' + type + ' passando'; this.muteForAd(true); },
         adFinished: () => end(true),
-        adError: (err) => end(false, this.errText(err))
+        adError: (err) => { const why = this.errText(err); if (/adsDisabled/i.test(why)) this.adsDisabled = true; end(false, why); }
       });
     } catch (e) { end(false, 'exceção: ' + this.errText(e)); }
   },
   midgame(cb) { this.requestAd('midgame', () => cb()); },
-  rewarded(onReward, onFail) { this.requestAd('rewarded', (ok, why) => { if (!ok && onFail) onFail(why); }, onReward); },
+  rewarded(onReward, onFail) {
+    // sem anúncios liberados pelo portal (Basic Launch): o bônus é dado sem anúncio
+    if (this.adsDisabled) { onReward(); return; }
+    this.requestAd('rewarded', (ok, why) => { if (!ok) { if (this.adsDisabled) onReward(); else if (onFail) onFail(why); } }, onReward);
+  },
   drawDebug() {
     if (!this.isCrazy() || !this.debug) return;
     ctx.save(); ctx.globalAlpha = 0.9;
@@ -3545,7 +3550,7 @@ const Game = {
     this.revivedPhase = true;
     this.lives = 0;
     this.respawnAtCheckpoint();
-    this.showBanner('+1 VIDA', 'Obrigado pelo apoio!', '#ffb02e');
+    this.showBanner('+1 VIDA', Platform.adsDisabled ? 'De volta ao checkpoint' : 'Obrigado pelo apoio!', '#ffb02e');
   },
   gameOver() {
     this.newRecord = false;
@@ -3964,7 +3969,9 @@ const UI = {
     if (st === 'victory') return { y: 306, items: [{ id: 'tomenu', label: 'MENU PRINCIPAL', color: '#55ff9a' }] };
     if (st === 'gameover') {
       const it = [];
-      if (Platform.hasRewarded() && !Game.revivedPhase) it.push({ id: 'revive', label: '+1 VIDA (ANÚNCIO)', sub: 'Veja um vídeo e volte ao checkpoint', color: '#ffb02e' });
+      if (Platform.hasRewarded() && !Game.revivedPhase) it.push(Platform.adsDisabled
+        ? { id: 'revive', label: '+1 VIDA', sub: 'Continue do checkpoint', color: '#ffb02e' }
+        : { id: 'revive', label: '+1 VIDA (ANÚNCIO)', sub: 'Veja um vídeo e volte ao checkpoint', color: '#ffb02e' });
       it.push({ id: 'retry', label: 'RECOMEÇAR SETOR', sub: 'Pontuação zera', color: '#55ff9a' }, { id: 'tomenu', label: 'MENU PRINCIPAL', h: 26 });
       return { y: it.length > 2 ? 204 : 222, items: it };
     }
