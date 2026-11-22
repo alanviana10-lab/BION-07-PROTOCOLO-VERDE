@@ -42,7 +42,8 @@
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v0.2.0',
+  version: 'v0.3.0',
+  phasesAvailable: 1,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
   render: { maxDpr: 2, maxBgRes: 3 },
   // Dificuldade atual (seleção chega na Etapa 3). Etapa 1 usa "veterano".
@@ -81,7 +82,15 @@ const CONFIG = {
   extraLives: 3,
   enemies: {
     soldier: { w: 18, h: 32, hp: 3, speed: 38, range: 330, fireRate: 1.7, telegraph: 0.35, bulletSpeed: 185, bulletLife: 3, maxAimDeg: 35, keepDist: 90, contactDmg: 1, score: 100 },
-    runner:  { w: 18, h: 26, hp: 2, speed: 150, triggerDist: 300, windup: 0.35, chargeTime: 1.6, recover: 0.6, contactDmg: 1, score: 150 }
+    runner:  { w: 18, h: 26, hp: 2, speed: 150, triggerDist: 300, windup: 0.35, chargeTime: 1.6, recover: 0.6, contactDmg: 1, score: 150 },
+    turret:  { w: 22, h: 22, hp: 5, range: 380, fireRate: 2.6, telegraph: 0.55, burst: 3, burstGap: 0.16, bulletSpeed: 170, bulletLife: 3, turnSpeed: 3, contactDmg: 0, score: 200 }
+  },
+  boss: {
+    name: 'SENTINELA-ALPHA', w: 66, h: 78, hp: 150, walkSpeed: 45, idleTime: 1.1, contactDmg: 1, score: 5000,
+    burst:  { tele: 0.8, count: 6, gap: 0.13, speed: 260, highY: 271, lowY: 291 },  // alto = agachar, baixo = pular
+    jump:   { tele: 0.7, airTime: 0.9 },
+    wave:   { speed: 240, h: 14, w: 16 },
+    mortar: { tele: 0.6, flight: 1.15, radius: 30, spacing: 70 }
   },
   enemyBulletDmg: 1,
   input: { deadzone: 0.28, btnMin: 64, btnMax: 86, topBtn: 42 },
@@ -216,6 +225,12 @@ const Audio = {
       case 'glass': this.noise(0.25, 0.18, 'highpass', 4000, 1500); this.tone('sine', 1800, 1200, 0.2, 0.05); break;
       case 'crate': this.noise(0.18, 0.2, 'bandpass', 800, 200); this.tone('square', 160, 60, 0.12, 0.08); break;
       case 'empty': this.tone('triangle', 400, 200, 0.15, 0.06); break;
+      case 'warn': this.tone('square', 880, 880, 0.12, 0.07); this.tone('square', 660, 660, 0.12, 0.07, 0.15); this.tone('square', 880, 880, 0.12, 0.07, 0.3); break;
+      case 'heavy': this.noise(0.35, 0.3, 'lowpass', 700, 40); this.tone('sine', 90, 30, 0.3, 0.3); break;
+      case 'checkpoint': this.tone('triangle', 523, 523, 0.1, 0.08); this.tone('triangle', 784, 784, 0.18, 0.08, 0.1); break;
+      case 'select': this.tone('triangle', 520, 520, 0.05, 0.06); break;
+      case 'gameover': this.tone('sawtooth', 330, 320, 0.3, 0.08); this.tone('sawtooth', 262, 250, 0.3, 0.08, 0.3); this.tone('sawtooth', 196, 120, 0.7, 0.09, 0.6); break;
+      case 'victory': [523, 659, 784, 1047].forEach((f, i) => this.tone('square', f, f, 0.16, 0.07, i * 0.13)); this.tone('triangle', 1047, 1047, 0.5, 0.08, 0.55); break;
       case 'death': this.tone('sawtooth', 500, 40, 0.9, 0.12); this.noise(0.8, 0.25, 'lowpass', 3000, 60); break;
     }
   }
@@ -731,6 +746,7 @@ const Player = {
     };
     for (const e of Enemies.list) if (!e.dead && test(e)) { found = true; if (apply) Enemies.damage(e, C.dmg, true); else return true; }
     for (const pr of Props.list) if (pr.alive && test(pr)) { found = true; if (apply) Props.damage(pr, C.dmg); else return true; }
+    if (Boss.active && !Boss.dying && test(Boss)) { found = true; if (apply) Boss.damage(C.dmg); else return true; }
     return found;
   },
   knife() {
@@ -894,7 +910,7 @@ const Enemies = {
   list: [],
   create(type, x, y) {
     const c = CONFIG.enemies[type];
-    const e = { type, x, y, vx: 0, vy: 0, w: c.w, h: c.h, hp: c.hp, flameCd: 0, facing: -1, flash: 0, state: 'idle', t: 0, fireT: c.fireRate ? c.fireRate * 0.7 : 0, onGround: false, dead: false, anim: Math.random() * 6, patrolDir: -1, patrolT: 1 + Math.random() * 2, tele: 0 };
+    const e = { type, x, y, vx: 0, vy: 0, w: c.w, h: c.h, hp: c.hp, flameCd: 0, aimA: Math.PI, burstLeft: 0, shotT: 0, facing: -1, flash: 0, state: 'idle', t: 0, fireT: c.fireRate ? c.fireRate * 0.7 : 0, onGround: false, dead: false, anim: Math.random() * 6, patrolDir: -1, patrolT: 1 + Math.random() * 2, tele: 0 };
     this.list.push(e);
     return e;
   },
@@ -971,10 +987,36 @@ const Enemies = {
           if (e.t <= 0) e.state = 'idle';
         }
         Physics.move(e, dt);
+      } else if (e.type === 'turret') {
+        const c = CONFIG.enemies.turret;
+        e.vx = 0;
+        const gx = e.x, gy = e.y - 14;
+        let ta = Math.atan2((p.y - 16) - gy, p.x - gx);
+        if (ta > 0.35 && ta < Math.PI - 0.35) ta = ta < Math.PI / 2 ? 0.35 : Math.PI - 0.35;
+        let d = ta - e.aimA; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+        e.aimA += Util.clamp(d, -c.turnSpeed * dt, c.turnSpeed * dt);
+        if (onScreen && !p.dead && dist < c.range) {
+          if (e.burstLeft > 0) {
+            e.shotT -= dt;
+            if (e.shotT <= 0) {
+              e.burstLeft--; e.shotT = c.burstGap;
+              const mx = gx + Math.cos(e.aimA) * 17, my = gy + Math.sin(e.aimA) * 17, sp = c.bulletSpeed * D.speedMul;
+              Pools.bullet({ x: mx, y: my, vx: Math.cos(e.aimA) * sp, vy: Math.sin(e.aimA) * sp, life: c.bulletLife, owner: 'e', dmg: CONFIG.enemyBulletDmg, r: 4 });
+              Pools.particle({ x: mx, y: my, vx: 0, vy: 0, life: 0.08, color: '#ff4dd2', size: 7, kind: 'flash' });
+              Audio.play('eshot');
+            }
+          } else {
+            e.fireT -= dt * D.fireMul;
+            e.tele = e.fireT < c.telegraph ? 1 : 0;
+            if (e.fireT <= 0) { e.burstLeft = c.burst; e.shotT = 0; e.fireT = c.fireRate * Util.rand(0.9, 1.2); e.tele = 0; }
+          }
+        } else e.tele = 0;
+        Physics.move(e, dt);
       }
       // contato
-      if (!p.dead && Util.overlap(e, p)) {
-        const c = CONFIG.enemies[e.type];
+      const cc = CONFIG.enemies[e.type];
+      if (cc.contactDmg > 0 && !p.dead && Util.overlap(e, p)) {
+        const c = cc;
         if (p.hurt(c.contactDmg, e.x) && e.type === 'runner') {
           e.state = 'recover'; e.t = c.recover; e.vx = -e.facing * 160; e.vy = -200;
         }
@@ -988,10 +1030,34 @@ const Enemies = {
     for (const e of this.list) {
       ctx.save();
       ctx.translate(e.x, e.y);
-      ctx.scale(e.facing, 1);
-      if (e.type === 'soldier') this.drawSoldier(e, t); else this.drawRunner(e, t);
+      if (e.type === 'turret') this.drawTurret(e, t);
+      else { ctx.scale(e.facing, 1); if (e.type === 'soldier') this.drawSoldier(e, t); else this.drawRunner(e, t); }
       ctx.restore();
     }
+  },
+  drawTurret(e, t) {
+    const fl = e.flash > 0;
+    ctx.fillStyle = fl ? '#fff' : '#2b2e3d';
+    ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(-9, -9); ctx.lineTo(9, -9); ctx.lineTo(12, 0); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#d23cff'; ctx.fillRect(-9, -9, 18, 1.5);
+    // cano
+    ctx.save(); ctx.translate(0, -14); ctx.rotate(e.aimA);
+    ctx.fillStyle = fl ? '#fff' : '#22242f'; ctx.fillRect(0, -3, 17, 6);
+    ctx.fillStyle = '#ff4dd2'; ctx.fillRect(14, -2, 3, 4);
+    if (e.tele) {
+      const k = 1 - Math.max(0, e.fireT) / CONFIG.enemies.turret.telegraph;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(255,77,210,${0.3 + 0.5 * k})`; ctx.beginPath(); ctx.arc(18, 0, 2 + k * 6, 0, 6.28); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.restore();
+    // cúpula
+    ctx.fillStyle = fl ? '#fff' : '#4a4f63'; ctx.beginPath(); ctx.arc(0, -14, 8.5, 0, 6.28); ctx.fill();
+    ctx.strokeStyle = '#2b2e3d'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = '#ff2a6d'; ctx.beginPath(); ctx.arc(Math.cos(e.aimA) * 4, -14 + Math.sin(e.aimA) * 4, 2, 0, 6.28); ctx.fill();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `rgba(255,42,109,${e.tele ? 0.5 : 0.2})`; ctx.beginPath(); ctx.arc(Math.cos(e.aimA) * 4, -14 + Math.sin(e.aimA) * 4, 5, 0, 6.28); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
   },
   drawSoldier(e, t) {
     const flash = e.flash > 0;
@@ -1107,6 +1173,9 @@ const Bullets = {
           if (!pr.alive || !this.hitBody(b, pr)) continue;
           if (this.applyHit(b, pr, dmgProp)) { gone = true; break; }
         }
+        if (!gone && Boss.active && !Boss.dying && this.hitBody(b, Boss)) {
+          if (this.applyHit(b, Boss, (o, d) => Boss.damage(d))) gone = true;
+        }
         if (gone) b.on = false;
       } else {
         const p = Player;
@@ -1155,9 +1224,9 @@ const Bullets = {
 /* ============================ Props (caixas e cápsulas) ============================ */
 const Props = {
   list: [],
-  create(type, x, y, item) {
+  create(type, x, y, item, ref) {
     const c = CONFIG.props[type];
-    const pr = { type, x, y, w: c.w, h: c.h, hp: c.hp, alive: true, flash: 0, flameCd: 0, item: item || null, t: Math.random() * 6 };
+    const pr = { type, x, y, w: c.w, h: c.h, hp: c.hp, alive: true, flash: 0, flameCd: 0, item: item || null, t: Math.random() * 6, ref };
     this.list.push(pr);
     return pr;
   },
@@ -1169,6 +1238,7 @@ const Props = {
   },
   destroy(pr) {
     pr.alive = false;
+    if (pr.ref) pr.ref.done = true;
     const c = CONFIG.props[pr.type];
     Game.addScore(c.score, pr.x, pr.y - pr.h - 6);
     if (pr.type === 'crate') {
@@ -1355,6 +1425,7 @@ const Bombs = {
     const inR = o => { const dx = Math.max(Math.abs(o.x - cx) - o.w / 2, 0), oy = o.y - o.h / 2, dy = Math.max(Math.abs(oy - cy) - o.h / 2, 0); return dx * dx + dy * dy < B.radius * B.radius; };
     for (const e of Enemies.list) if (!e.dead && inR(e)) Enemies.damage(e, B.dmg, true);
     for (const pr of Props.list) if (pr.alive && inR(pr)) Props.damage(pr, B.dmg);
+    if (Boss.active && !Boss.dying && inR(Boss)) Boss.damage(B.dmg);
     for (const bl of Pools.bullets) if (bl.on && bl.owner === 'e' && Math.hypot(bl.x - cx, bl.y - cy) < B.radius) bl.on = false;
   },
   update(dt) {
@@ -1369,6 +1440,7 @@ const Bombs = {
         else { this.explode(b); continue; }
       }
       for (const e of Enemies.list) if (!e.dead && Util.overlap(b, e)) { this.explode(b); break; }
+      if (!b.done && Boss.active && !Boss.dying && Util.overlap(b, Boss)) this.explode(b);
       if (!b.done && (b.t > B.fuse || b.y > CONFIG.world.height + 40)) this.explode(b);
     }
     this.list = this.list.filter(b => !b.done);
@@ -1388,76 +1460,345 @@ const Bombs = {
   }
 };
 
-/* ============================ Level (Fase 1 — trecho inicial) ============================ */
+/* ============================ Chefe: SENTINELA-ALPHA ============================ */
+const Boss = {
+  active: false, dying: false, shells: [], waves: [],
+  spawn(x) {
+    const C = CONFIG.boss;
+    Object.assign(this, {
+      active: true, dying: false, x, y: -80, vx: 0, vy: 0, w: C.w, h: C.h, hp: C.hp, maxHp: C.hp, name: C.name,
+      facing: -1, state: 'intro', t: 0, flash: 0, flameCd: 0, last: null, shots: 0, shotT: 0, burstY: C.burst.highY,
+      anim: 0, deathT: 0, expT: 0, introLanded: false, onGround: false
+    });
+    this.shells = []; this.waves = [];
+    Game.boss = this;
+  },
+  reset() { this.active = false; this.dying = false; this.shells = []; this.waves = []; Game.boss = null; },
+  damage(d) {
+    if (!this.active || this.dying || this.state === 'intro') return;
+    this.hp -= d; this.flash = 0.06;
+    Audio.play('hit');
+    if (this.hp <= 0) { this.hp = 0; this.die(); }
+  },
+  die() {
+    this.dying = true; this.deathT = 2.4; this.expT = 0; this.vx = 0;
+    Pools.clearBullets('e'); this.shells = []; this.waves = [];
+  },
+  face() { this.facing = Player.x < this.x ? -1 : 1; },
+  chooseAttack() {
+    const C = CONFIG.boss;
+    const opts = ['burst', 'jump', 'mortar'].filter(a => a !== this.last);
+    const a = opts[Math.floor(Math.random() * opts.length)];
+    this.last = a; this.face(); this.vx = 0;
+    if (a === 'burst') { this.state = 'burstTele'; this.t = C.burst.tele; this.burstY = Math.random() < 0.5 ? C.burst.highY : C.burst.lowY; Audio.play('warn'); }
+    else if (a === 'jump') { this.state = 'jumpTele'; this.t = C.jump.tele; Audio.play('telegraph'); }
+    else { this.state = 'mortarTele'; this.t = C.mortar.tele; Audio.play('telegraph'); }
+  },
+  cannonPivot() { return { x: this.x + this.facing * 22, y: this.y - 52 + this.crouchOff() }; },
+  crouchOff() {
+    if (this.state === 'jumpTele') return 10 * Math.min(1, (CONFIG.boss.jump.tele - this.t) / 0.2);
+    if (this.state === 'recover') return 6 * Math.max(0, this.t / 0.6);
+    return 0;
+  },
+  update(dt) {
+    if (!this.active) return;
+    const C = CONFIG.boss, D = Game.diff, p = Player, A = Level.arenaX, E = Level.arenaEnd, G = CONFIG.world.gravity, GY = CONFIG.world.groundY;
+    this.flash = Math.max(0, this.flash - dt);
+    this.flameCd = Math.max(0, this.flameCd - dt);
+    this.anim += dt;
+    if (this.dying) {
+      this.deathT -= dt; this.expT -= dt;
+      if (this.expT <= 0) {
+        this.expT = 0.13;
+        FX.explosion(this.x + Util.rand(-30, 30), this.y - Util.rand(10, 70), 0.8);
+        Audio.play('explode'); Game.addShake(5, 0.15);
+      }
+      if (this.deathT <= 0) {
+        for (let i = 0; i < 4; i++) FX.explosion(this.x + Util.rand(-25, 25), this.y - Util.rand(15, 60), 2);
+        Audio.play('bigexplode'); Game.addShake(8, 0.5);
+        this.active = false; Game.boss = null;
+        Game.bossDefeated(this.x, this.y - this.h);
+      }
+      return;
+    }
+    // física simples (chão plano da arena)
+    this.vy += G * dt; this.y += this.vy * dt; this.x += this.vx * dt;
+    let landed = false;
+    if (this.y >= GY) { if (this.vy > 200) landed = true; this.y = GY; this.vy = 0; this.onGround = true; } else this.onGround = false;
+    this.x = Util.clamp(this.x, A + this.w / 2 + 4, E - this.w / 2 - 4);
+    if (landed) {
+      Game.addShake(7, 0.3); Audio.play('heavy');
+      FX.dust(this.x - 24, GY, 6); FX.dust(this.x + 24, GY, 6);
+    }
+    this.t -= dt;
+    switch (this.state) {
+      case 'intro':
+        if (this.onGround && !this.introLanded) { this.introLanded = true; this.t = 1.0; }
+        if (this.introLanded && this.t <= 0) { this.state = 'idle'; this.t = 0.8; }
+        break;
+      case 'idle': {
+        this.face();
+        const dist = Math.abs(p.x - this.x);
+        const want = dist < 140 ? -1 : (dist > 260 ? 1 : 0);
+        this.vx = want * this.facing * C.walkSpeed * D.speedMul;
+        if (this.t <= 0) this.chooseAttack();
+        break;
+      }
+      case 'burstTele':
+        if (this.t <= 0) { this.state = 'burst'; this.shots = C.burst.count; this.shotT = 0; }
+        break;
+      case 'burst':
+        this.shotT -= dt;
+        if (this.shotT <= 0 && this.shots > 0) {
+          const pv = this.cannonPivot(), mx = pv.x + this.facing * 42, sp = C.burst.speed * D.speedMul;
+          Pools.bullet({ x: mx, y: this.burstY, vx: this.facing * sp, vy: 0, life: 3, owner: 'e', dmg: CONFIG.enemyBulletDmg, r: 5 });
+          Pools.particle({ x: mx, y: this.burstY, vx: 0, vy: 0, life: 0.08, color: '#ff4dd2', size: 10, kind: 'flash' });
+          Audio.play('eshot');
+          this.shots--; this.shotT = C.burst.gap / D.fireMul;
+        }
+        if (this.shots <= 0) { this.state = 'idle'; this.t = C.idleTime / D.fireMul; }
+        break;
+      case 'jumpTele':
+        if (this.t <= 0) {
+          const tx = Util.clamp(p.x, A + 50, E - 50), T = C.jump.airTime / Math.max(0.85, D.speedMul);
+          this.state = 'jumping'; this.vy = -G * T / 2; this.vx = (tx - this.x) / T; this.y -= 1;
+          Audio.play('jump');
+        }
+        break;
+      case 'jumping':
+        if (landed) {
+          this.vx = 0; this.state = 'recover'; this.t = 0.6;
+          const sp = C.wave.speed * D.speedMul;
+          this.waves.push({ x: this.x - 30, dir: -1, sp }, { x: this.x + 30, dir: 1, sp });
+        }
+        break;
+      case 'recover':
+        this.vx = 0;
+        if (this.t <= 0) { this.state = 'idle'; this.t = C.idleTime / D.fireMul; }
+        break;
+      case 'mortarTele':
+        if (this.t <= 0) { this.state = 'mortar'; this.shots = 3; this.shotT = 0; }
+        break;
+      case 'mortar':
+        this.shotT -= dt;
+        if (this.shotT <= 0 && this.shots > 0) {
+          const off = [-1, 0, 1][3 - this.shots] * C.mortar.spacing;
+          const tx = Util.clamp(p.x + off, A + 20, E - 20);
+          const x0 = this.x - this.facing * 6, y0 = this.y - this.h - 10, T = C.mortar.flight;
+          this.shells.push({ x: x0, y: y0, vx: (tx - x0) / T, vy: (GY - y0 - 0.5 * G * T * T) / T, tx, t: T, max: T });
+          Pools.particle({ x: x0, y: y0, vx: 0, vy: 0, life: 0.1, color: '#ffb02e', size: 10, kind: 'flash' });
+          Audio.play('throw');
+          this.shots--; this.shotT = 0.28 / D.fireMul;
+        }
+        if (this.shots <= 0) { this.state = 'idle'; this.t = C.idleTime / D.fireMul + 0.3; }
+        break;
+    }
+    // projéteis do morteiro
+    for (const s of this.shells) {
+      s.t -= dt; s.vy += G * dt; s.x += s.vx * dt; s.y += s.vy * dt;
+      if (s.y >= GY - 2) {
+        s.done = true;
+        FX.explosion(s.x, GY - 6, 0.7); Audio.play('explode'); Game.addShake(3, 0.12);
+        const r = C.mortar.radius;
+        const dx = Math.max(Math.abs(p.x - s.x) - p.w / 2, 0), dy = Math.max((GY - 6) - p.y, 0, (p.y - p.h) - (GY - 6));
+        if (!p.dead && dx * dx + dy * dy < r * r) p.hurt(1, s.x);
+      }
+    }
+    this.shells = this.shells.filter(s => !s.done);
+    // ondas de choque
+    for (const w of this.waves) {
+      w.x += w.dir * w.sp * dt;
+      if (w.x < A || w.x > E) w.done = true;
+      if (Math.random() < 0.6) Pools.particle({ x: w.x, y: GY - 2, vx: Util.rand(-20, 20), vy: Util.rand(-90, -30), life: 0.3, color: '#ffb02e', size: 1.5, kind: 'spark', grav: 300 });
+      if (!p.dead && p.y > GY - C.wave.h && Math.abs(p.x - w.x) < C.wave.w / 2 + p.w / 2) p.hurt(1, w.x - w.dir * 10);
+    }
+    this.waves = this.waves.filter(w => !w.done);
+    // contato
+    if (!p.dead && this.state !== 'intro' && Util.overlap(this, p)) p.hurt(C.contactDmg, this.x);
+  },
+  draw(t) {
+    // avisos (desenhados mesmo após a morte dos projéteis)
+    const C = CONFIG.boss, GY = CONFIG.world.groundY;
+    for (const s of this.shells) {
+      const k = 1 - s.t / s.max;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = `rgba(255,60,60,${0.5 + 0.5 * Math.sin(t * 30)})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(s.tx, GY - 1, C.mortar.radius * (1.3 - k * 0.3), 5, 0, 0, 6.28); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,60,60,0.18)'; ctx.beginPath(); ctx.ellipse(s.tx, GY - 1, C.mortar.radius * k, 4 * k, 0, 0, 6.28); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = '#2b2e3d'; ctx.beginPath(); ctx.arc(s.x, s.y, 5, 0, 6.28); ctx.fill();
+      ctx.fillStyle = '#ffb02e'; ctx.beginPath(); ctx.arc(s.x, s.y, 2, 0, 6.28); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'lighter';
+    for (const w of this.waves) {
+      ctx.fillStyle = 'rgba(255,150,40,0.35)';
+      ctx.beginPath(); ctx.moveTo(w.x - 14, GY); ctx.quadraticCurveTo(w.x, GY - C.wave.h * 1.8, w.x + 14, GY); ctx.fill();
+      ctx.fillStyle = 'rgba(255,230,160,0.8)';
+      ctx.beginPath(); ctx.moveTo(w.x - 6, GY); ctx.quadraticCurveTo(w.x, GY - C.wave.h, w.x + 6, GY); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    if (!this.active) return;
+    // linha de aviso da rajada
+    if (this.state === 'burstTele' && Math.floor(t * 16) % 2 === 0) {
+      ctx.strokeStyle = 'rgba(255,42,109,0.75)'; ctx.lineWidth = 1.5; ctx.setLineDash([8, 6]);
+      ctx.beginPath(); ctx.moveTo(Level.arenaX, this.burstY); ctx.lineTo(Level.arenaEnd, this.burstY); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = '#ff9ab0';
+      ctx.fillText(this.burstY === C.burst.highY ? 'AGACHE!' : 'PULE!', this.x - this.facing * 10, this.y - this.h - 22);
+    }
+    const fl = this.flash > 0 || (this.dying && Math.floor(t * 20) % 2 === 0);
+    const co = this.crouchOff();
+    const shake = this.dying ? Util.rand(-2, 2) : 0;
+    ctx.save();
+    ctx.translate(this.x + shake, this.y);
+    ctx.scale(this.facing, 1);
+    const walk = Math.abs(this.vx) > 2 && this.onGround ? Math.sin(this.anim * 7) : 0;
+    const dark = fl ? '#fff' : '#2b2e3d', body = fl ? '#fff' : '#4a4f63', plate = fl ? '#fff' : '#5c6278';
+    // pernas (articulação invertida)
+    const leg = (hx, ph) => {
+      const hy = -38 + co;
+      const kx = hx + 10 + ph * 4, ky = -20 + co * 0.5, fx = hx + ph * 6, fy = this.onGround ? -2 : -6;
+      ctx.strokeStyle = dark; ctx.lineWidth = 9; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.fillStyle = plate; ctx.beginPath(); ctx.arc(kx, ky, 4.5, 0, 6.28); ctx.fill();
+      ctx.fillStyle = dark; ctx.fillRect(fx - 10, fy - 2, 20, 4);
+    };
+    leg(-16, -walk); leg(12, walk);
+    // casco
+    const hy = -78 + co;
+    ctx.fillStyle = body; Util.rr(ctx, -33, hy, 66, 42, 8); ctx.fill();
+    ctx.fillStyle = plate; Util.rr(ctx, -28, hy + 4, 40, 12, 4); ctx.fill();
+    ctx.fillStyle = dark; ctx.fillRect(-33, hy + 30, 66, 5);
+    if (!fl) {
+      ctx.strokeStyle = '#d23cff'; ctx.lineWidth = 1.3;
+      ctx.beginPath(); ctx.moveTo(-24, hy + 20); ctx.lineTo(-14, hy + 26); ctx.lineTo(-18, hy + 33); ctx.moveTo(0, hy + 18); ctx.lineTo(8, hy + 24); ctx.stroke();
+      ctx.fillStyle = '#ffb02e';
+      for (let i = 0; i < 4; i++) ctx.fillRect(-30 + i * 9, hy + 31, 4, 3);
+    }
+    // sensor
+    const tele = this.state.endsWith('Tele');
+    ctx.fillStyle = '#ff2a6d'; Util.rr(ctx, 16, hy + 8, 13, 6, 2); ctx.fill();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `rgba(255,42,109,${tele ? 0.5 + 0.4 * Math.sin(t * 40) : 0.25})`;
+    ctx.beginPath(); ctx.arc(23, hy + 11, tele ? 12 : 7, 0, 6.28); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+    // morteiro superior
+    ctx.save(); ctx.translate(-10, hy); ctx.rotate(-0.5);
+    ctx.fillStyle = dark; ctx.fillRect(-6, -16, 12, 18);
+    ctx.fillStyle = '#ffb02e'; ctx.fillRect(-5, -18, 10, 3);
+    if (this.state === 'mortarTele' || this.state === 'mortar') {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(255,176,46,${0.4 + 0.4 * Math.sin(t * 30)})`; ctx.beginPath(); ctx.arc(0, -17, 9, 0, 6.28); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.restore();
+    // canhão duplo
+    const pv = this.cannonPivot();
+    const ang = (this.state === 'burstTele' || this.state === 'burst') ? Math.atan2(this.burstY - pv.y, 42) : 0.12;
+    ctx.save(); ctx.translate(22, -52 + co); ctx.rotate(ang);
+    ctx.fillStyle = plate; Util.rr(ctx, -8, -10, 18, 20, 4); ctx.fill();
+    ctx.fillStyle = dark; ctx.fillRect(6, -7, 36, 5); ctx.fillRect(6, 2, 36, 5);
+    ctx.fillStyle = '#ff4dd2'; ctx.fillRect(39, -7, 3, 5); ctx.fillRect(39, 2, 3, 5);
+    if (this.state === 'burstTele') {
+      const k = 1 - this.t / C.burst.tele;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(255,77,210,${0.3 + 0.6 * k})`; ctx.beginPath(); ctx.arc(44, 0, 4 + k * 10, 0, 6.28); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.restore();
+    if (this.state === 'jumpTele' && Math.floor(t * 20) % 2 === 0) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = 'rgba(255,150,40,0.3)'; ctx.fillRect(-36, -6, 72, 6);
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.restore();
+  }
+};
+
+/* ============================ Level (Fase 1 — Selva Bioluminescente) ============================ */
 const Level = {
-  name: 'SETOR 1 — SELVA BIOLUMINESCENTE',
-  length: 3700,
-  endX: 3560,
-  solids: [], oneways: [], spawns: [], signs: [],
-  build() {
+  name: 'SELVA BIOLUMINESCENTE',
+  length: 9200, arenaX: 8500, arenaEnd: 9140,
+  solids: [], oneways: [], spawns: [], signs: [], checkpoints: [],
+  build(phase) {
     const G = CONFIG.world.groundY;
     this.solids = [
-      { x: -200, y: G, w: 4100, h: 120, kind: 'ground' },
+      { x: -200, y: G, w: 9600, h: 120, kind: 'ground' },
       { x: 880, y: G - 40, w: 130, h: 40, kind: 'block' },
       { x: 1880, y: G - 30, w: 90, h: 30, kind: 'block' },
       { x: 1970, y: G - 60, w: 90, h: 60, kind: 'block' },
-      { x: 2820, y: G - 44, w: 120, h: 44, kind: 'block' }
+      { x: 2820, y: G - 44, w: 120, h: 44, kind: 'block' },
+      { x: 3820, y: G - 40, w: 110, h: 40, kind: 'block' },
+      { x: 4050, y: G - 30, w: 80, h: 30, kind: 'block' },
+      { x: 5600, y: G - 50, w: 100, h: 50, kind: 'block' },
+      { x: 6500, y: G - 40, w: 120, h: 40, kind: 'block' },
+      { x: 6620, y: G - 80, w: 90, h: 80, kind: 'block' },
+      { x: 7050, y: G - 36, w: 100, h: 36, kind: 'block' },
+      { x: 7700, y: G - 46, w: 110, h: 46, kind: 'block' },
+      { x: this.arenaEnd, y: 0, w: 80, h: G, kind: 'wall' }
     ];
     this.oneways = [
       { x: 480, y: G - 78, w: 130 }, { x: 680, y: G - 140, w: 110 },
       { x: 1280, y: G - 76, w: 150 }, { x: 1500, y: G - 135, w: 130 },
       { x: 2150, y: G - 90, w: 160 }, { x: 2400, y: G - 150, w: 110 },
-      { x: 2600, y: G - 92, w: 140 }, { x: 3080, y: G - 80, w: 150 }, { x: 3280, y: G - 140, w: 120 }
+      { x: 2600, y: G - 92, w: 140 }, { x: 3080, y: G - 80, w: 150 }, { x: 3280, y: G - 140, w: 120 },
+      { x: 3950, y: G - 110, w: 120 },
+      { x: 4700, y: G - 80, w: 140 }, { x: 4950, y: G - 140, w: 120 },
+      { x: 5350, y: G - 80, w: 130 }, { x: 5520, y: G - 150, w: 110 }, { x: 5750, y: G - 110, w: 140 },
+      { x: 5950, y: G - 170, w: 110 }, { x: 6150, y: G - 100, w: 150 },
+      { x: 6800, y: G - 150, w: 130 }, { x: 7250, y: G - 90, w: 150 }, { x: 7450, y: G - 150, w: 120 },
+      { x: 7950, y: G - 90, w: 140 }
     ];
+    const S = (x, type, h = 0, item) => ({ x, type, y: G - h, item });
     this.spawns = [
-      { x: 620, type: 'soldier', y: G },
-      { x: 760, type: 'runner', y: G },
-      { x: 950, type: 'soldier', y: G - 40 },
-      { x: 1180, type: 'runner', y: G },
-      { x: 1360, type: 'soldier', y: G - 76 },
-      { x: 1560, type: 'soldier', y: G - 135 },
-      { x: 1640, type: 'runner', y: G },
-      { x: 1720, type: 'runner', y: G },
-      { x: 2010, type: 'soldier', y: G - 60 },
-      { x: 2230, type: 'soldier', y: G - 90 },
-      { x: 2300, type: 'runner', y: G },
-      { x: 2450, type: 'soldier', y: G - 150 },
-      { x: 2680, type: 'runner', y: G },
-      { x: 2880, type: 'soldier', y: G - 44 },
-      { x: 3000, type: 'runner', y: G },
-      { x: 3060, type: 'runner', y: G },
-      { x: 3150, type: 'soldier', y: G - 80 },
-      { x: 3330, type: 'soldier', y: G - 140 },
-      { x: 3420, type: 'runner', y: G },
-      // caixas e cápsulas
-      { x: 420, type: 'crate', y: G, item: 'bombs' },
-      { x: 545, type: 'crate', y: G - 78, item: 'repair' },
-      { x: 1110, type: 'capsule', y: G, item: 'spread' },
-      { x: 1450, type: 'crate', y: G },
-      { x: 1565, type: 'crate', y: G - 135, item: 'ammo' },
-      { x: 2090, type: 'capsule', y: G, item: 'laser' },
-      { x: 2440, type: 'crate', y: G - 150, item: 'bombs' },
-      { x: 2560, type: 'crate', y: G },
-      { x: 2760, type: 'capsule', y: G, item: 'flame' },
-      { x: 3200, type: 'crate', y: G, item: 'repair' },
-      { x: 3330, type: 'capsule', y: G - 140, item: 'bombs' }
+      // trecho 1 — tutorial e primeiros combates
+      S(620, 'soldier'), S(760, 'runner'), S(950, 'soldier', 40), S(1180, 'runner'), S(1360, 'soldier', 76),
+      S(1560, 'soldier', 135), S(1640, 'runner'), S(1720, 'runner'), S(2010, 'soldier', 60), S(2230, 'soldier', 90),
+      S(2300, 'runner'), S(2450, 'soldier', 150), S(2680, 'runner'), S(2880, 'soldier', 44), S(3000, 'runner'),
+      S(3060, 'runner'), S(3150, 'soldier', 80), S(3330, 'soldier', 140), S(3420, 'runner'),
+      S(420, 'crate', 0, 'bombs'), S(545, 'crate', 78, 'repair'), S(1110, 'capsule', 0, 'spread'), S(1450, 'crate'),
+      S(1565, 'crate', 135, 'ammo'), S(2090, 'capsule', 0, 'laser'), S(2440, 'crate', 150, 'bombs'), S(2560, 'crate'),
+      S(2760, 'capsule', 0, 'flame'), S(3200, 'crate', 0, 'repair'), S(3330, 'capsule', 140, 'bombs'),
+      // trecho 2 — torretas
+      S(3875, 'turret', 40), S(3990, 'soldier', 110), S(4100, 'runner'), S(4180, 'capsule', 0, 'spread'),
+      // checkpoint 1 (4350) — clareira (reservada para o mecha na Etapa 4)
+      S(4500, 'runner'), S(4560, 'runner'), S(4760, 'soldier', 80), S(4800, 'crate', 0, 'bombs'), S(5000, 'soldier', 140),
+      S(5100, 'runner'), S(5160, 'runner'), S(5220, 'runner'), S(5300, 'turret'),
+      // trecho 3 — escada de copas
+      S(5400, 'soldier', 80), S(5560, 'turret', 150), S(5650, 'soldier', 50), S(5780, 'crate', 110, 'repair'),
+      S(5800, 'soldier', 110), S(5900, 'runner'), S(5990, 'turret', 170), S(6000, 'capsule', 0, 'laser'),
+      S(6200, 'soldier', 100), S(6300, 'runner'),
+      // trecho 4 — fortificação
+      S(6450, 'runner'), S(6560, 'turret', 40), S(6660, 'turret', 80), S(6850, 'soldier', 150), S(6950, 'runner'),
+      S(7000, 'crate', 0, 'ammo'), S(7090, 'soldier', 36), S(7300, 'soldier', 90), S(7330, 'capsule', 0, 'flame'),
+      S(7350, 'runner'), S(7500, 'turret', 150),
+      // trecho 5 — corredor final
+      S(7600, 'runner'), S(7650, 'runner'), S(7750, 'soldier', 46), S(7900, 'crate', 0, 'repair'),
+      S(8000, 'soldier', 90), S(8010, 'crate', 90, 'bombs'), S(8050, 'runner'), S(8100, 'runner'), S(8150, 'turret'),
+      // antes do chefe
+      S(8330, 'crate', 0, 'repair'), S(8400, 'crate', 0, 'ammo')
     ].sort((a, b) => a.x - b.x);
     this.signs = [
       { x: 70, y: 210, lines: ['MOVA-SE E ATIRE', 'Segure TIRO = automático'] },
       { x: 300, y: 200, lines: ['CIMA = mirar p/ cima', 'Diagonal = mirar na diagonal'] },
       { x: 480, y: 150, lines: ['Segure PULO = mais alto', 'BAIXO+PULO desce da plataforma'] },
-      { x: 1080, y: 190, lines: ['DASH: invulnerável', 'Atravessa tiros inimigos'] },
-      { x: 1740, y: 190, lines: ['BAIXO no chão = agachar', 'BAIXO no ar = mirar p/ baixo'] },
       { x: 760, y: 120, lines: ['PERTO DO ALVO: TIRO = FACA', 'BOMBA quica 1 vez e explode'] },
-      { x: 1170, y: 120, lines: ['Liberte aliados das cápsulas', 'Eles deixam itens para você'] }
+      { x: 1080, y: 190, lines: ['DASH: invulnerável', 'Atravessa tiros inimigos'] },
+      { x: 1170, y: 120, lines: ['Liberte aliados das cápsulas', 'Eles deixam itens para você'] },
+      { x: 1740, y: 190, lines: ['BAIXO no chão = agachar', 'BAIXO no ar = mirar p/ baixo'] },
+      { x: 3720, y: 180, lines: ['TORRETAS À FRENTE', 'Bombas resolvem rápido'] },
+      { x: 8440, y: 170, lines: ['PERIGO: SENTINELA-ALPHA', 'Observe os avisos dos ataques'] }
     ];
+    this.checkpoints = [{ x: 80 }, { x: 4350 }, { x: 8250 }];
     Physics.solids = this.solids; Physics.oneways = this.oneways;
   },
+  closeGate() { this.solids.push({ x: this.arenaX - 24, y: 0, w: 24, h: CONFIG.world.groundY, kind: 'gate' }); },
+  openGate() { const i = this.solids.findIndex(s => s.kind === 'gate'); if (i >= 0) this.solids.splice(i, 1); },
   draw(camX, t) {
     const L = camX - 40, R = camX + View.viewW + 40;
     // placas holográficas
     ctx.textAlign = 'center';
-    if (Game.state !== 'title') for (const s of this.signs) {
+    if (!Game.inMenu()) for (const s of this.signs) {
       if (s.x + 90 < L || s.x - 90 > R) continue;
       const a = 0.75 + 0.25 * Math.sin(t * 3 + s.x);
       ctx.strokeStyle = 'rgba(63,246,255,0.5)'; ctx.lineWidth = 1;
@@ -1468,6 +1809,19 @@ const Level = {
       ctx.fillText(s.lines[0], s.x, s.y);
       ctx.font = '8px monospace'; ctx.fillStyle = `rgba(160,220,255,${a * 0.85})`;
       ctx.fillText(s.lines[1], s.x, s.y + 13);
+    }
+    // checkpoints
+    for (let i = 1; i < this.checkpoints.length; i++) {
+      const c = this.checkpoints[i];
+      if (c.x < L || c.x > R) continue;
+      const on = Game.cpIdx >= i;
+      ctx.fillStyle = '#1c2a36'; ctx.fillRect(c.x - 3, 230, 6, 70); ctx.fillRect(c.x - 9, 296, 18, 4);
+      const col = on ? '85,255,154' : '255,60,90';
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = `rgba(${col},${0.25 + 0.15 * Math.sin(t * 5)})`; ctx.beginPath(); ctx.arc(c.x, 226, 12, 0, 6.28); ctx.fill();
+      ctx.fillStyle = `rgba(${col},0.95)`; ctx.beginPath(); ctx.arc(c.x, 226, 4.5, 0, 6.28); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.font = 'bold 7px monospace'; ctx.fillStyle = on ? '#bfffe0' : '#ffb3c0'; ctx.fillText('CHECKPOINT', c.x, 212);
     }
     // chão e blocos
     if (!Render.groundGrad) {
@@ -1480,13 +1834,11 @@ const Level = {
       const x0 = Math.max(s.x, L), x1 = Math.min(s.x + s.w, R);
       if (s.kind === 'ground') {
         ctx.fillStyle = Render.groundGrad; ctx.fillRect(x0, s.y, x1 - x0, s.h);
-        // placas metálicas no solo
         ctx.strokeStyle = 'rgba(40,90,90,0.5)'; ctx.lineWidth = 1;
         const step = 48;
-        for (let x = Math.floor(x0 / step) * step; x < x1; x += step) {
-          ctx.beginPath(); ctx.moveTo(x, s.y + 8); ctx.lineTo(x + 10, s.y + 60); ctx.stroke();
-        }
-        // grama metálica
+        ctx.beginPath();
+        for (let x = Math.floor(x0 / step) * step; x < x1; x += step) { ctx.moveTo(x, s.y + 8); ctx.lineTo(x + 10, s.y + 60); }
+        ctx.stroke();
         ctx.strokeStyle = 'rgba(60,220,170,0.55)'; ctx.lineWidth = 1.2;
         ctx.beginPath();
         for (let x = Math.floor(x0 / 9) * 9; x < x1; x += 9) {
@@ -1495,6 +1847,19 @@ const Level = {
           ctx.moveTo(x, s.y); ctx.lineTo(x + sway, s.y - hh);
         }
         ctx.stroke();
+      } else if (s.kind === 'wall') {
+        ctx.fillStyle = '#141a2a'; ctx.fillRect(s.x, s.y, s.w, s.h);
+        ctx.fillStyle = '#ffb02e';
+        for (let y = s.y; y < s.y + s.h; y += 24) { ctx.beginPath(); ctx.moveTo(s.x, y); ctx.lineTo(s.x + 10, y); ctx.lineTo(s.x, y + 12); ctx.fill(); }
+        ctx.fillStyle = 'rgba(255,42,109,0.6)'; ctx.fillRect(s.x, s.y, 2, s.h);
+        continue;
+      } else if (s.kind === 'gate') {
+        ctx.globalCompositeOperation = 'lighter';
+        const a = 0.35 + 0.2 * Math.sin(t * 12);
+        ctx.fillStyle = `rgba(255,42,109,${a})`; ctx.fillRect(s.x + 8, s.y, 8, s.h);
+        ctx.fillStyle = 'rgba(255,200,220,0.8)'; ctx.fillRect(s.x + 11, s.y, 2, s.h);
+        ctx.globalCompositeOperation = 'source-over';
+        continue;
       } else {
         ctx.fillStyle = '#132a33'; ctx.fillRect(s.x, s.y, s.w, s.h);
         ctx.fillStyle = '#1c3d48'; ctx.fillRect(s.x, s.y, s.w, 6);
@@ -1502,7 +1867,6 @@ const Level = {
         for (let x = s.x + 8; x < s.x + s.w - 4; x += 22) ctx.fillRect(x, s.y + 12, 3, 3);
         ctx.strokeStyle = 'rgba(80,140,150,0.6)'; ctx.strokeRect(s.x + 0.5, s.y + 0.5, s.w - 1, s.h - 1);
       }
-      // borda neon superior
       ctx.globalCompositeOperation = 'lighter';
       ctx.fillStyle = 'rgba(63,246,255,0.18)'; ctx.fillRect(x0, s.y - 2, x1 - x0, 5);
       ctx.fillStyle = 'rgba(120,255,220,0.9)'; ctx.fillRect(x0, s.y, x1 - x0, 1.5);
@@ -1513,7 +1877,6 @@ const Level = {
       if (p.x + p.w < L || p.x > R) continue;
       ctx.fillStyle = '#1a2440'; Util.rr(ctx, p.x, p.y, p.w, 9, 3); ctx.fill();
       ctx.fillStyle = '#2b3a66'; ctx.fillRect(p.x + 3, p.y + 1, p.w - 6, 3);
-      // cipós pendurados
       ctx.strokeStyle = 'rgba(125,255,106,0.5)'; ctx.lineWidth = 1;
       ctx.beginPath();
       for (let x = p.x + 10; x < p.x + p.w - 6; x += 26) {
@@ -1527,39 +1890,98 @@ const Level = {
       ctx.fillStyle = 'rgba(200,120,255,0.9)'; ctx.fillRect(p.x + 2, p.y, p.w - 4, 1.2);
       ctx.globalCompositeOperation = 'source-over';
     }
-    // portão final do trecho
-    const gx = this.endX;
-    if (gx > L - 60 && gx < R + 60) {
-      ctx.fillStyle = '#1b1530'; ctx.fillRect(gx, 150, 26, 150); ctx.fillRect(gx + 90, 150, 26, 150);
-      ctx.fillStyle = '#2a2050'; ctx.fillRect(gx - 6, 140, 128, 14);
-      ctx.globalCompositeOperation = 'lighter';
-      const a = 0.35 + 0.25 * Math.sin(t * 5);
-      ctx.fillStyle = `rgba(85,255,154,${a})`; ctx.fillRect(gx + 26, 154, 64, 146);
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.textAlign = 'center'; ctx.font = 'bold 9px monospace'; ctx.fillStyle = '#c8ffd9';
-      ctx.fillText('SAÍDA DO TRECHO', gx + 58, 136);
-    }
   }
 };
 
 /* ============================ Game ============================ */
 const Game = {
-  state: 'title', paused: false, time: 0, camX: 0, score: 0, hitStop: 0,
+  state: 'menu', paused: false, time: 0, camX: 0, score: 0, hitStop: 0,
   shakeAmp: 0, shakeT: 0, shakeDur: 0, spawnIdx: 0, deadT: 0, popups: [],
   boss: null, combo: 0, comboT: 0, lives: CONFIG.extraLives, banner: null,
-  stats: { kills: 0, allies: 0, maxCombo: 0 },
-  diff: CONFIG.difficulty[CONFIG.defaultDifficulty],
-  start() {
-    Level.build();
+  stats: { kills: 0, allies: 0, maxCombo: 0, time: 0 },
+  diffKey: CONFIG.defaultDifficulty, diff: CONFIG.difficulty[CONFIG.defaultDifficulty],
+  phase: 1, pendingPhase: 1, cpIdx: 0, arena: false, bossDone: false, introT: 0, clearT: 0,
+  menuSel: 0, newRecord: false, phaseStats: null,
+  inMenu() { return this.state === 'menu' || this.state === 'diff' || this.state === 'howto'; },
+  isOverlayMenu() { return this.inMenu() || this.state === 'result' || this.state === 'next' || this.state === 'gameover' || this.paused; },
+  isPlaying() { return this.state === 'play' || this.state === 'dead' || this.state === 'clear'; },
+  goto(state) { this.state = state; this.menuSel = 0; Input.clear(); },
+  toMenu() { this.paused = false; Boss.reset(); this.goto('menu'); },
+  // nova partida a partir de uma fase (pontuação zera)
+  startRun(phase) {
+    this.diff = CONFIG.difficulty[this.diffKey];
+    this.score = 0; this.lives = CONFIG.extraLives; this.newRecord = false;
+    this.stats = { kills: 0, allies: 0, maxCombo: 0, time: 0 };
+    this.startPhase(phase);
+  },
+  clearWorld() {
     Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = [];
-    this.combo = 0; this.comboT = 0; this.banner = null; this.lives = CONFIG.extraLives;
-    this.stats = { kills: 0, allies: 0, maxCombo: 0 };
     Pools.clearBullets();
     for (const p of Pools.particles) p.on = false;
-    this.camX = 0; this.score = 0; this.spawnIdx = 0; this.popups = []; this.hitStop = 0;
-    Player.reset(80, CONFIG.world.groundY);
-    this.state = 'play'; this.paused = false;
-    Input.clear();
+    Boss.reset();
+    this.combo = 0; this.comboT = 0; this.banner = null; this.popups = []; this.hitStop = 0; this.shakeT = 0;
+  },
+  startPhase(phase) {
+    this.phase = phase;
+    Level.build(phase);
+    this.clearWorld();
+    this.cpIdx = 0; this.arena = false; this.bossDone = false;
+    this.camX = 0; this.spawnIdx = 0;
+    Player.reset(Level.checkpoints[0].x, CONFIG.world.groundY);
+    this.paused = false;
+    this.goto('intro'); this.introT = 2.6;
+    Audio.play('start');
+  },
+  respawnAtCheckpoint() {
+    const cp = Level.checkpoints[this.cpIdx];
+    const keepParticles = true;
+    Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = [];
+    Pools.clearBullets(); Boss.reset(); Level.openGate();
+    this.arena = false; this.combo = 0; this.comboT = 0;
+    this.camX = Math.max(0, cp.x - View.viewW * CONFIG.camera.lead);
+    this.spawnIdx = Level.spawns.findIndex(s => s.x >= this.camX - 20);
+    if (this.spawnIdx < 0) this.spawnIdx = Level.spawns.length;
+    Player.reset(cp.x, CONFIG.world.groundY);
+    Player.invuln = CONFIG.player.respawnInvuln;
+    this.state = 'play';
+    this.showBanner('VIDAS x' + this.lives, 'De volta ao checkpoint', '#3ff6ff');
+  },
+  enterArena() {
+    this.arena = true;
+    for (const e of Enemies.list) if (!e.dead) FX.explosion(e.x, e.y - e.h / 2, 0.6);
+    Enemies.list = []; Pools.clearBullets('e');
+    Level.closeGate();
+    Boss.spawn(Level.arenaEnd - 110);
+    this.showBanner('ALERTA!', CONFIG.boss.name + ' DETECTADA', '#ff2a6d');
+    Audio.play('warn');
+  },
+  bossDefeated(x, y) {
+    this.bossDone = true;
+    this.addScore(CONFIG.boss.score, x, y);
+    this.showBanner('SETOR LIMPO!', CONFIG.boss.name + ' DESTRUÍDA', '#55ff9a');
+    Player.invuln = 99;
+    Audio.play('victory');
+    this.state = 'clear'; this.clearT = 3.0;
+  },
+  saveRecord() {
+    try {
+      const r = Save.data.recordes;
+      if (this.score > (r[this.diffKey] || 0)) { r[this.diffKey] = this.score; this.newRecord = true; }
+      Save.write();
+    } catch (e) {}
+  },
+  finishPhase() {
+    this.phaseStats = { score: this.score, kills: this.stats.kills, allies: this.stats.allies, maxCombo: this.stats.maxCombo, time: this.stats.time };
+    Save.data.progresso.faseDesbloqueada = Math.max(Save.data.progresso.faseDesbloqueada, this.phase + 1);
+    this.newRecord = false;
+    this.saveRecord();
+    this.goto('result');
+  },
+  gameOver() {
+    this.newRecord = false;
+    this.saveRecord();
+    Audio.play('gameover');
+    this.goto('gameover');
   },
   addShake(amp, dur) {
     amp = Math.min(amp, CONFIG.fx.shakeMax);
@@ -1596,20 +2018,14 @@ const Game = {
     Player.dead = true;
     FX.explosion(Player.x, Player.y - 16, 1.4);
     this.addShake(8, 0.35);
+    this.breakCombo();
     Audio.play('death');
     this.state = 'dead'; this.deadT = 1.8;
   },
-  respawn() {
-    Pools.clearBullets('e');
-    const x = Math.max(this.camX + 60, 60);
-    Player.reset(x, 40);
-    Player.invuln = CONFIG.player.respawnInvuln;
-    this.state = 'play';
-  },
   setPaused(v) {
-    if (this.state !== 'play' && this.state !== 'dead') return;
+    if (!this.isPlaying()) return;
     if (this.paused === v) return;
-    this.paused = v;
+    this.paused = v; this.menuSel = 0;
     Input.clear();
     if (!v) Audio.init();
   },
@@ -1618,35 +2034,61 @@ const Game = {
     Audio.setMuted(Save.data.config.mudo);
     Save.write();
   },
-  update(dt) {
-    this.time += dt;
-    Input.update();
-    if (this.state === 'title' || this.state === 'end') return;
-    if (this.paused) return;
-    if (this.shakeT > 0) this.shakeT -= dt;
-    if (this.hitStop > 0) { this.hitStop -= dt; return; }
-
-    if (this.state === 'dead') {
-      this.deadT -= dt;
-      if (this.deadT <= 0) this.respawn();
+  updateCamera(dt) {
+    if (this.arena) {
+      const A = Level.arenaX, E = Level.arenaEnd, aw = E - A;
+      const target = View.viewW >= aw ? A + aw / 2 - View.viewW / 2 : Util.clamp(Player.x - View.viewW / 2, A, E - View.viewW);
+      this.camX = Util.lerp(this.camX, target, Math.min(1, dt * 4));
+      return;
     }
-    Player.update(dt);
-
-    // câmera só avança
     const target = Player.x - View.viewW * CONFIG.camera.lead;
     const maxCam = Math.max(0, Level.length - View.viewW);
     if (target > this.camX) this.camX = Math.min(maxCam, Util.lerp(this.camX, target, Math.min(1, dt * 8)));
     this.camX = Util.clamp(this.camX, 0, maxCam);
+  },
+  update(dt) {
+    this.time += dt;
+    Input.update();
+    if (this.state === 'intro') { this.introT -= dt; if (this.introT <= 0) this.goto('play'); return; }
+    if (!this.isPlaying() || this.paused) return;
+    if (this.shakeT > 0) this.shakeT -= dt;
+    if (this.hitStop > 0) { this.hitStop -= dt; return; }
+    if (this.state !== 'clear') this.stats.time += dt;
+
+    if (this.state === 'dead') {
+      this.deadT -= dt;
+      if (this.deadT <= 0) {
+        if (this.lives > 0) { this.lives--; this.respawnAtCheckpoint(); }
+        else { this.gameOver(); return; }
+      }
+    }
+    if (this.state === 'clear') {
+      this.clearT -= dt;
+      if (this.clearT <= 0) { this.finishPhase(); return; }
+    }
+    Player.update(dt);
+    this.updateCamera(dt);
+
+    // checkpoints
+    for (let i = this.cpIdx + 1; i < Level.checkpoints.length; i++) {
+      if (!Player.dead && Player.x >= Level.checkpoints[i].x) {
+        this.cpIdx = i; this.showBanner('CHECKPOINT', 'Progresso salvo nesta fase', '#55ff9a'); Audio.play('checkpoint');
+      }
+    }
+    // arena do chefe
+    if (!this.arena && !this.bossDone && !Player.dead && Player.x > Level.arenaX + 40) this.enterArena();
 
     // spawn por posição da câmera
     while (this.spawnIdx < Level.spawns.length && Level.spawns[this.spawnIdx].x < this.camX + View.viewW + 30) {
       const s = Level.spawns[this.spawnIdx++];
+      if (this.arena || s.x > Level.arenaX) continue;
       if (CONFIG.enemies[s.type]) Enemies.create(s.type, s.x, s.y);
-      else Props.create(s.type, s.x, s.y, s.item);
+      else if (!s.done) Props.create(s.type, s.x, s.y, s.item, s);
     }
     if (this.comboT > 0) { this.comboT -= dt; if (this.comboT <= 0) this.combo = 0; }
     if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
     Enemies.update(dt);
+    Boss.update(dt);
     Bombs.update(dt);
     Bullets.update(dt);
     Props.update(dt);
@@ -1655,8 +2097,6 @@ const Game = {
     FX.update(dt);
     for (const p of this.popups) { p.t -= dt; p.y -= 30 * dt; }
     this.popups = this.popups.filter(p => p.t > 0);
-
-    if (this.state === 'play' && Player.x >= Level.endX + 40) { this.state = 'end'; Audio.play('start'); }
   },
   draw() {
     const t = this.time;
@@ -1667,7 +2107,8 @@ const Game = {
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, View.viewW, CONFIG.world.height); ctx.clip();
 
-    const camX = this.state === 'title' ? (t * 30) % 3000 : this.camX;
+    const menu = this.inMenu();
+    const camX = menu ? (t * 30) % 3000 : this.camX;
     Render.drawSky(t);
     Render.drawLayer(Render.bgFar, 0.15, camX);
     Render.drawFlies(camX * 0.6, t);
@@ -1678,10 +2119,11 @@ const Game = {
     ctx.save();
     ctx.translate(-Math.round(camX * 100) / 100 + sx, sy);
     Level.draw(camX, t);
-    if (this.state !== 'title') {
+    if (!menu) {
       Props.draw(t);
       Items.draw(t);
       Enemies.draw(t);
+      Boss.draw(t);
       Allies.draw(t);
       Player.draw(t);
       Bombs.draw(t);
@@ -1692,15 +2134,13 @@ const Game = {
       ctx.globalAlpha = 1;
     }
     ctx.restore();
-    // vinheta
     ctx.fillStyle = 'rgba(0,0,0,0.18)';
     ctx.fillRect(0, 0, View.viewW, 6); ctx.fillRect(0, 354, View.viewW, 6);
 
-    if (this.state !== 'title') { UI.drawHUD(t); if (!this.paused) UI.drawBanner(t); }
+    if (this.isPlaying()) { UI.drawHUD(t); if (!this.paused) UI.drawBanner(t); }
     UI.drawOverlay(t);
     ctx.restore();
 
-    // camada de tela (px CSS): controles e botões do topo
     ctx.setTransform(View.dpr, 0, 0, View.dpr, 0, 0);
     UI.drawControls(t);
   }
@@ -1732,7 +2172,7 @@ const UI = {
       { name: 'dash', label: 'DASH', x: ax - size * 0.1, y: ay - size * 1.2, r, color: '#3ff6ff' },
       { name: 'bomb', label: 'BOMBA', x: ax - size * 1.32, y: ay - size * 1.08, r, color: '#ffb02e' }
     ];
-    const tb = C.topBtn, ty = (View.portrait ? View.gy : Math.max(s.t, View.gy)) + 6;
+    const tb = C.topBtn, ty = (View.portrait ? View.gy + View.gh + 4 : Math.max(s.t, View.gy)) + 6;
     const rightEdge = View.portrait ? W - s.r - 6 : Math.min(W - s.r, View.gx + View.gw) - 6;
     this.top = [
       { name: 'pause', x: rightEdge - tb, y: ty, w: tb, h: tb },
@@ -1762,7 +2202,7 @@ const UI = {
   },
   topAction(name) {
     Audio.init(); Audio.play('ui');
-    if (name === 'pause') { if (Game.state === 'play' || Game.state === 'dead') Game.setPaused(!Game.paused); }
+    if (name === 'pause') { if (Game.isPlaying()) Game.setPaused(!Game.paused); }
     else if (name === 'mute') Game.toggleMute();
     else if (name === 'full') this.toggleFullscreen();
   },
@@ -1780,12 +2220,6 @@ const UI = {
         }
       }
     } catch (e) { /* sem tela cheia */ }
-  },
-  tapScreen() {
-    Audio.init();
-    if (Game.state === 'title' || Game.state === 'end') { Audio.play('start'); Game.start(); return true; }
-    if (Game.paused) { Game.setPaused(false); return true; }
-    return false;
   },
   // ---------- HUD (coordenadas do mundo, 360 de altura)
   drawHUD(t) {
@@ -1890,41 +2324,186 @@ const UI = {
     ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
     ctx.fillStyle = color; ctx.fillText(text, x, y);
   },
+  // ---------- Menus (coordenadas do mundo)
+  phaseNames: ['', 'SELVA BIOLUMINESCENTE', 'RUÍNAS DA TORRE DE REDE', 'NÚCLEO SUBTERRÂNEO'],
+  menuItems() {
+    const st = Game.state, rec = Save.data.recordes;
+    if (Game.paused) return { y: 170, items: [{ id: 'resume', label: 'CONTINUAR' }, { id: 'tomenu', label: 'MENU PRINCIPAL' }] };
+    if (st === 'menu') {
+      const it = [{ id: 'play', label: 'JOGAR', color: '#55ff9a' }];
+      if (Save.data.progresso.faseDesbloqueada > 1) it.push({ id: 'continue', label: 'CONTINUAR', sub: 'SETOR ' + Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable) });
+      it.push({ id: 'howto', label: 'COMO JOGAR', color: '#c07bff' });
+      return { y: 196, items: it };
+    }
+    if (st === 'diff') return { y: 96, w: 310, items: [
+      { id: 'd_recruta', label: 'RECRUTA', sub: 'Vida 8 · inimigos 85% · cadência 70% · x1   Recorde ' + rec.recruta, color: '#55ff9a', h: 42 },
+      { id: 'd_veterano', label: 'VETERANO', sub: 'Vida 5 · inimigos 100% · cadência 100% · x1   Recorde ' + rec.veterano, color: '#3ff6ff', h: 42 },
+      { id: 'd_sobrecarga', label: 'SOBRECARGA', sub: 'Vida 3 · inimigos 120% · cadência 130% · x2   Recorde ' + rec.sobrecarga, color: '#ff4d6d', h: 42 },
+      { id: 'back', label: 'VOLTAR', w: 160, h: 28 }
+    ] };
+    if (st === 'howto') return { y: 318, items: [{ id: 'back', label: 'VOLTAR', h: 28 }] };
+    if (st === 'result') return { y: 300, items: [{ id: 'next', label: 'CONTINUAR', color: '#55ff9a' }] };
+    if (st === 'next') return { y: 250, items: [{ id: 'tomenu', label: 'MENU PRINCIPAL' }] };
+    if (st === 'gameover') return { y: 222, items: [{ id: 'retry', label: 'CONTINUAR', sub: 'Recomeça o setor · pontuação zera', color: '#55ff9a' }, { id: 'tomenu', label: 'MENU PRINCIPAL' }] };
+    return null;
+  },
+  menuRects() {
+    const m = this.menuItems();
+    if (!m) return [];
+    let y = m.y; const out = [];
+    for (const it of m.items) {
+      const w = it.w || m.w || 200, h = it.h || (it.sub ? 38 : 30);
+      out.push(Object.assign({}, it, { x: View.viewW / 2 - w / 2, y, w, h }));
+      y += h + 8;
+    }
+    return out;
+  },
+  activate(id) {
+    Audio.init(); Audio.play('ui');
+    if (id === 'play') { Game.pendingPhase = 1; Game.goto('diff'); Game.menuSel = 1; }
+    else if (id === 'continue') { Game.pendingPhase = Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable); Game.goto('diff'); Game.menuSel = 1; }
+    else if (id === 'howto') Game.goto('howto');
+    else if (id === 'back') Game.goto('menu');
+    else if (id.startsWith('d_')) { Game.diffKey = id.slice(2); Game.startRun(Game.pendingPhase); }
+    else if (id === 'resume') Game.setPaused(false);
+    else if (id === 'tomenu') Game.toMenu();
+    else if (id === 'retry') Game.startRun(Game.phase);
+    else if (id === 'next') Game.goto('next');
+  },
+  menuTap(x, y) {
+    if (Game.state === 'intro') { Game.goto('play'); return; }
+    const gx = (x - View.gx) / View.scale, gy = (y - View.gy) / View.scale;
+    const rects = this.menuRects();
+    rects.forEach((r, i) => { if (gx >= r.x - 4 && gx <= r.x + r.w + 4 && gy >= r.y - 3 && gy <= r.y + r.h + 3) { Game.menuSel = i; this.activate(r.id); } });
+  },
+  menuKey(code) {
+    if (Game.state === 'intro') { if (['Enter', 'Space', 'KeyJ', 'KeyZ', 'KeyK', 'KeyX'].includes(code)) Game.goto('play'); return; }
+    const rects = this.menuRects();
+    if (!rects.length) return;
+    if (code === 'ArrowUp' || code === 'KeyW') { Game.menuSel = (Game.menuSel - 1 + rects.length) % rects.length; Audio.play('select'); }
+    else if (code === 'ArrowDown' || code === 'KeyS') { Game.menuSel = (Game.menuSel + 1) % rects.length; Audio.play('select'); }
+    else if (['Enter', 'Space', 'KeyJ', 'KeyZ', 'KeyK', 'KeyX'].includes(code)) { const r = rects[Math.min(Game.menuSel, rects.length - 1)]; this.activate(r.id); }
+    else if (code === 'Escape' && (Game.state === 'diff' || Game.state === 'howto')) this.activate('back');
+  },
+  drawMenu(t) {
+    const rects = this.menuRects();
+    rects.forEach((r, i) => {
+      const sel = i === Game.menuSel, col = r.color || '#3ff6ff';
+      ctx.fillStyle = sel ? 'rgba(20,50,60,0.9)' : 'rgba(6,14,24,0.82)'; Util.rr(ctx, r.x, r.y, r.w, r.h, 6); ctx.fill();
+      ctx.strokeStyle = col; ctx.lineWidth = sel ? 2 : 1; ctx.globalAlpha = sel ? 1 : 0.6; ctx.stroke(); ctx.globalAlpha = 1;
+      if (sel) {
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = col; ctx.globalAlpha = 0.08 + 0.05 * Math.sin(t * 6); Util.rr(ctx, r.x - 3, r.y - 3, r.w + 6, r.h + 6, 8); ctx.fill();
+        ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = col;
+        const ay = r.y + (r.sub ? 15 : r.h / 2);
+        ctx.beginPath(); ctx.moveTo(r.x + 10, ay - 5); ctx.lineTo(r.x + 16, ay); ctx.lineTo(r.x + 10, ay + 5); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(r.x + r.w - 10, ay - 5); ctx.lineTo(r.x + r.w - 16, ay); ctx.lineTo(r.x + r.w - 10, ay + 5); ctx.fill();
+      }
+      ctx.textAlign = 'center'; ctx.font = 'bold 13px monospace'; ctx.fillStyle = sel ? '#ffffff' : col;
+      ctx.fillText(r.label, r.x + r.w / 2, r.y + (r.sub ? 19 : r.h / 2 + 4.5));
+      if (r.sub) { ctx.font = '8px monospace'; ctx.fillStyle = '#9fb8c8'; ctx.fillText(r.sub, r.x + r.w / 2, r.y + 32); }
+    });
+  },
+  veil(a) { ctx.fillStyle = `rgba(2,4,12,${a})`; ctx.fillRect(0, 0, View.viewW, 360); },
+  version() { ctx.textAlign = 'right'; ctx.font = '9px monospace'; ctx.fillStyle = '#6f8a99'; ctx.fillText(CONFIG.version, View.viewW - 10, 350); },
+  fmtTime(s) { s = Math.floor(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
   drawOverlay(t) {
-    const cx = View.viewW / 2;
-    if (Game.state === 'title') {
-      ctx.fillStyle = 'rgba(2,4,12,0.55)'; ctx.fillRect(0, 0, View.viewW, 360);
+    const cx = View.viewW / 2, st = Game.state;
+    if (st === 'menu') {
+      this.veil(0.55);
       const gl = Math.random() < 0.04 ? Util.rand(-3, 3) : 0;
-      this.neonText('BION-07', cx + gl, 130, 54, '#e9fff3', '#55ff9a');
-      this.neonText('PROTOCOLO VERDE', cx, 168, 20, '#bffcff', '#3ff6ff');
-      ctx.fillStyle = 'rgba(85,255,154,0.6)'; ctx.fillRect(cx - 120, 180, 240, 1.5);
-      if (Math.floor(t * 2) % 2 === 0) this.neonText('TOQUE OU PRESSIONE UMA TECLA', cx, 236, 12, '#ffffff', '#b44dff');
+      this.neonText('BION-07', cx + gl, 108, 52, '#e9fff3', '#55ff9a');
+      this.neonText('PROTOCOLO VERDE', cx, 144, 19, '#bffcff', '#3ff6ff');
+      ctx.fillStyle = 'rgba(85,255,154,0.6)'; ctx.fillRect(cx - 120, 156, 240, 1.5);
+      ctx.font = '8px monospace'; ctx.fillStyle = '#88a8b8'; ctx.textAlign = 'center';
+      const r = Save.data.recordes;
+      ctx.fillText('RECORDES  Recruta ' + r.recruta + ' · Veterano ' + r.veterano + ' · Sobrecarga ' + r.sobrecarga, cx, 176);
+      this.drawMenu(t); this.version();
+    } else if (st === 'diff') {
+      this.veil(0.7);
+      this.neonText('DIFICULDADE', cx, 62, 22, '#e9fff3', '#3ff6ff');
       ctx.font = '9px monospace'; ctx.fillStyle = '#88a8b8'; ctx.textAlign = 'center';
-      ctx.fillText('Etapa 2 — protótipo de combate do Setor 1', cx, 262);
-      ctx.textAlign = 'right'; ctx.fillStyle = '#6f8a99'; ctx.fillText(CONFIG.version, View.viewW - 10, 350);
-    } else if (Game.state === 'end') {
-      ctx.fillStyle = 'rgba(2,4,12,0.72)'; ctx.fillRect(0, 0, View.viewW, 360);
-      this.neonText('FIM DO TRECHO', cx, 130, 30, '#e9fff3', '#55ff9a');
-      ctx.font = '10px monospace'; ctx.fillStyle = '#9fe9ff'; ctx.textAlign = 'center';
-      ctx.fillText('O restante do Setor 1 chega nas próximas etapas.', cx, 160);
-      this.neonText('PONTOS ' + Game.score, cx, 198, 16, '#ffe27a', '#ffb02e');
-      if (Math.floor(t * 2) % 2 === 0) this.neonText('TOQUE PARA JOGAR DE NOVO', cx, 250, 12, '#ffffff', '#b44dff');
-      ctx.textAlign = 'right'; ctx.font = '9px monospace'; ctx.fillStyle = '#6f8a99'; ctx.fillText(CONFIG.version, View.viewW - 10, 350);
+      ctx.fillText('SETOR ' + Game.pendingPhase + ' — ' + this.phaseNames[Game.pendingPhase], cx, 80);
+      this.drawMenu(t); this.version();
+    } else if (st === 'howto') {
+      this.veil(0.82);
+      this.neonText('COMO JOGAR', cx, 40, 20, '#e9fff3', '#c07bff');
+      const lines = [
+        ['OBJETIVO', 'Atravesse o setor, liberte aliados e destrua o chefe.'],
+        ['TOQUE', 'Direcional: andar · cima/diagonal: mirar · baixo: agachar (no ar: mirar p/ baixo)'],
+        ['', 'TIRO (segure = automático; perto do alvo vira FACA) · PULO (segure = mais alto)'],
+        ['', 'BOMBA: arremesso que quica e explode · DASH: impulso invulnerável'],
+        ['TECLADO', 'WASD/Setas mover · J/Z tiro · K/X/Espaço pulo · L/C bomba · Shift dash'],
+        ['', 'P/Esc pausa · M mudo · BAIXO+PULO desce de plataformas'],
+        ['ITENS', 'S=Spread L=Laser F=Flame M=Munição B=Bombas +=Reparo'],
+        ['COMBO', 'Abates em até 2,5 s aumentam o combo: x2 (5) x3 (10) x4 (20) x5 (30)'],
+        ['VIDAS', 'Barra de vida + 3 vidas extras. Ao cair, volta ao último checkpoint.']
+      ];
+      ctx.textAlign = 'left';
+      const small = View.viewW < 600;
+      let y = 70; const lx = Math.max(10, cx - 250), tx = lx + (small ? 46 : 62);
+      for (const [h, txt] of lines) {
+        if (h) { ctx.font = `bold ${small ? 7.5 : 9}px monospace`; ctx.fillStyle = '#55ff9a'; ctx.fillText(h, lx, y); }
+        ctx.font = `${small ? 7 : 8.5}px monospace`; ctx.fillStyle = '#cfe6f0'; ctx.fillText(txt, tx, y);
+        y += 26;
+      }
+      this.drawMenu(t);
+    } else if (st === 'intro') {
+      const a = Math.min(1, Game.introT * 1.5);
+      this.veil(0.55 * a);
+      ctx.globalAlpha = a;
+      this.neonText('SETOR ' + Game.phase, cx, 140, 34, '#e9fff3', '#55ff9a');
+      this.neonText(this.phaseNames[Game.phase], cx, 172, 16, '#bffcff', '#3ff6ff');
+      ctx.font = '9px monospace'; ctx.fillStyle = '#9fb8c8'; ctx.textAlign = 'center';
+      ctx.fillText('Dificuldade: ' + Game.diffKey.toUpperCase() + '   ·   toque para começar', cx, 200);
+      ctx.globalAlpha = 1;
+    } else if (st === 'result') {
+      this.veil(0.78);
+      this.neonText('SETOR ' + Game.phase + ' CONCLUÍDO', cx, 56, 22, '#e9fff3', '#55ff9a');
+      const ps = Game.phaseStats;
+      const rows = [['PONTOS', String(ps.score)], ['INIMIGOS DESTRUÍDOS', String(ps.kills)], ['ALIADOS LIBERTADOS', String(ps.allies)], ['MAIOR COMBO', String(ps.maxCombo)], ['TEMPO', this.fmtTime(ps.time)]];
+      ctx.fillStyle = 'rgba(6,14,24,0.85)'; Util.rr(ctx, cx - 150, 80, 300, 150, 8); ctx.fill();
+      ctx.strokeStyle = 'rgba(85,255,154,0.5)'; ctx.stroke();
+      rows.forEach(([k, v], i) => {
+        const y = 108 + i * 25;
+        ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = '#9fe9ff'; ctx.fillText(k, cx - 130, y);
+        ctx.textAlign = 'right'; ctx.fillStyle = i === 0 ? '#ffe27a' : '#ffffff'; ctx.fillText(v, cx + 130, y);
+      });
+      if (Game.newRecord && Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 262, 18, '#ffffff', '#ffb02e');
+      this.drawMenu(t);
+    } else if (st === 'next') {
+      this.veil(0.85);
+      const n = Game.phase + 1;
+      this.neonText('SETOR ' + n, cx, 130, 32, '#e9fff3', '#ffb02e');
+      this.neonText(this.phaseNames[n] || '', cx, 162, 15, '#ffe2b0', '#ff7a1a');
+      ctx.font = '9px monospace'; ctx.fillStyle = '#9fb8c8'; ctx.textAlign = 'center';
+      ctx.fillText('Este setor chega na próxima etapa de desenvolvimento.', cx, 200);
+      ctx.fillText('Seu progresso e recorde foram salvos.', cx, 214);
+      this.drawMenu(t);
+    } else if (st === 'gameover') {
+      this.veil(0.8);
+      this.neonText('GAME OVER', cx, 110, 36, '#ffd0d8', '#ff4d6d');
+      ctx.font = 'bold 12px monospace'; ctx.fillStyle = '#ffe27a'; ctx.textAlign = 'center';
+      ctx.fillText('PONTOS ' + Game.score, cx, 148);
+      ctx.font = '9px monospace'; ctx.fillStyle = '#9fb8c8';
+      ctx.fillText('Recorde ' + Game.diffKey + ': ' + Save.data.recordes[Game.diffKey], cx, 164);
+      if (Game.newRecord && Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 196, 16, '#ffffff', '#ffb02e');
+      this.drawMenu(t);
     } else if (Game.paused) {
-      ctx.fillStyle = 'rgba(2,4,12,0.7)'; ctx.fillRect(0, 0, View.viewW, 360);
-      this.neonText('PAUSADO', cx, 140, 34, '#e9fff3', '#3ff6ff');
-      ctx.font = '10px monospace'; ctx.fillStyle = '#9fe9ff'; ctx.textAlign = 'center';
-      ctx.fillText('Toque na tela, P ou Esc para continuar', cx, 172);
-      ctx.fillStyle = '#7f97a6';
-      ctx.fillText('Teclado: WASD/Setas mover · J/Z tiro/faca · K/X/Espaço pulo', cx, 204);
-      ctx.fillText('L/C bomba · Shift dash · P/Esc pausa · M mudo', cx, 218);
-      ctx.textAlign = 'right'; ctx.font = '9px monospace'; ctx.fillStyle = '#6f8a99'; ctx.fillText(CONFIG.version, View.viewW - 10, 350);
-    } else if (Game.state === 'dead') {
+      this.veil(0.7);
+      this.neonText('PAUSADO', cx, 120, 34, '#e9fff3', '#3ff6ff');
+      this.drawMenu(t);
+      ctx.font = '9px monospace'; ctx.fillStyle = '#7f97a6'; ctx.textAlign = 'center';
+      ctx.fillText('Teclado: P/Esc continua · WASD/Setas mover · J/Z tiro', cx, 262);
+      ctx.fillText('K/Espaço pulo · L bomba · Shift dash · M mudo', cx, 275);
+      this.version();
+    } else if (st === 'dead') {
       const a = Math.min(1, (1.8 - Game.deadT) * 2);
       ctx.globalAlpha = a;
       this.neonText('NÚCLEO DANIFICADO', cx, 150, 22, '#ffd0d8', '#ff4d6d');
       ctx.font = '10px monospace'; ctx.fillStyle = '#ffb3c0'; ctx.textAlign = 'center';
-      ctx.fillText('Reiniciando KAI-4...', cx, 172);
+      ctx.fillText(Game.lives > 0 ? 'Vidas extras: ' + Game.lives + ' · voltando ao checkpoint...' : 'Sem vidas extras...', cx, 172);
       ctx.globalAlpha = 1;
     }
   },
@@ -1941,9 +2520,9 @@ const UI = {
       ctx.stroke();
       ctx.fillStyle = 'rgba(63,246,255,0.5)'; ctx.fillRect(0, top, W, 1);
       ctx.font = '12px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(160,220,255,0.55)';
-      ctx.fillText('Gire o celular para jogar melhor', W / 2, top + 22);
+      ctx.fillText('Gire o celular para jogar melhor', W / 2, top + 76);
     }
-    const playing = (Game.state === 'play' || Game.state === 'dead') && !Game.paused;
+    const playing = Game.isPlaying() && !Game.paused;
     const alpha = View.portrait ? 1 : 0.85;
     if (playing || View.portrait) {
       ctx.globalAlpha = playing ? alpha : 0.35;
@@ -2043,8 +2622,8 @@ function onPointerDown(e) {
   const x = e.clientX, y = e.clientY;
   const top = UI.hitTop(x, y);
   if (top) { Input.uiPointers.set(e.pointerId, top); return; }
-  if (UI.tapScreen()) return;
-  if (Game.state !== 'play' && Game.state !== 'dead') return;
+  if (Game.isOverlayMenu() || Game.state === 'intro') { UI.menuTap(x, y); return; }
+  if (!Game.isPlaying()) return;
   if (UI.inStickZone(x, y) && Input.stick.id === null) {
     const st = Input.stick, home = UI.stickHome;
     st.id = e.pointerId;
@@ -2097,9 +2676,9 @@ window.addEventListener('keydown', e => {
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
   if (e.repeat) return;
   if (e.code === 'KeyM') { Game.toggleMute(); return; }
-  if (e.code === 'KeyP' || e.code === 'Escape') { Game.setPaused(!Game.paused); return; }
-  if (Game.state === 'title' || Game.state === 'end') { if (e.code !== 'ShiftLeft' && e.code !== 'ShiftRight') { Audio.play('start'); Game.start(); } return; }
-  if (Game.paused) { if (e.code === 'Enter') Game.setPaused(false); return; }
+  if ((e.code === 'KeyP' || e.code === 'Escape') && Game.isPlaying()) { Game.setPaused(!Game.paused); return; }
+  if (Game.isOverlayMenu() || Game.state === 'intro') { UI.menuKey(e.code); return; }
+  if (!Game.isPlaying()) return;
   Input.keys.add(e.code);
   if (Input.keyMap[e.code]) Input.latch.add(Input.keyMap[e.code]);
 });
@@ -2144,6 +2723,7 @@ Level.build();
 Input.clear();
 Player.reset(80, CONFIG.world.groundY);
 View.resize();
+window.__BION_UI = UI;
 requestAnimationFrame(frame);
 window.__BION = { Game, Player, Enemies, Input, View, CONFIG, Pools };
 </script>
