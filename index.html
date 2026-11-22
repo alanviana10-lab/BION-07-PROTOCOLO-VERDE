@@ -249,7 +249,7 @@ const I18N = {
     'MECHA DESTRUÍDO': 'MECH DESTROYED', 'KAI-4 ejetado': 'KAI-4 ejected', 'MECHA PERDIDO': 'MECH LOST', 'Caiu no poço': 'Fell into the pit',
     '+1 VIDA': '+1 LIFE', 'Obrigado pelo apoio!': 'Thanks for your support!', 'ARMA ESPECIAL': 'SPECIAL WEAPON', 'MUNIÇÃO': 'AMMO', ' RECARREGADA': ' RELOADED',
     'BOMBAS +': 'BOMBS +', 'REPARO +': 'REPAIR +', 'BLINDAGEM +': 'ARMOR +', 'MUNIÇÃO ESGOTADA': 'OUT OF AMMO', '-1 VIDA': '-1 LIFE',
-    'REFORÇOS!': 'REINFORCEMENTS!', 'ANÚNCIO INDISPONÍVEL': 'AD UNAVAILABLE', 'AGACHE!': 'DUCK!', 'PULE!': 'JUMP!', 'ENTRAR': 'ENTER', 'Obrigado, KAI-4!': 'Thanks, KAI-4!',
+    'REFORÇOS!': 'REINFORCEMENTS!', 'ANÚNCIO INDISPONÍVEL': 'AD UNAVAILABLE', 'Tente de novo em instantes': 'Try again shortly', 'AGACHE!': 'DUCK!', 'PULE!': 'JUMP!', 'ENTRAR': 'ENTER', 'Obrigado, KAI-4!': 'Thanks, KAI-4!',
     // placas
     'MOVA-SE E ATIRE': 'MOVE AND SHOOT', 'Segure TIRO = automático': 'Hold FIRE = auto-fire', 'CIMA = mirar p/ cima': 'UP = aim up',
     'Diagonal = mirar na diagonal': 'Diagonal = aim diagonally', 'Segure PULO = mais alto': 'Hold JUMP = jump higher', 'BAIXO+PULO desce da plataforma': 'DOWN+JUMP drops through',
@@ -292,16 +292,21 @@ const I18N = {
 // Todas as chamadas viram "não faz nada" se o SDK não existir: o jogo nunca trava por causa dele.
 const Platform = {
   name: BION_PLATFORM, sdk: null, ready: false, inGameplay: false, adActive: false, installPrompt: null,
+  status: 'carregando', env: '?', debug: true,   // debug: mostra o estado do SDK na tela (desligar depois da aprovação)
   isCrazy() { return this.name === 'crazygames'; },
   call(fn) { try { return fn(); } catch (e) { return undefined; } },
   async init() {
     if (this.isCrazy()) {
       const S = window.CrazyGames && window.CrazyGames.SDK;
-      if (S) {
-        this.call(() => S.game.loadingStart());
-        try { await S.init(); this.sdk = S; this.ready = S.environment !== 'disabled'; } catch (e) { this.ready = false; }
-        this.call(() => S.game.loadingStop());
-      }
+      if (!S) { this.status = 'SDK não carregou (script bloqueado?)'; return; }
+      this.call(() => S.game.loadingStart());
+      try {
+        await S.init();
+        this.sdk = S; this.ready = true;
+        this.env = String(this.call(() => S.environment));
+        this.status = 'pronto · ambiente: ' + this.env;
+      } catch (e) { this.ready = false; this.status = 'init falhou: ' + this.errText(e); }
+      this.call(() => S.game.loadingStop());
     } else {
       // PWA: service worker (só funciona em http/https) e convite de instalação
       if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -332,26 +337,46 @@ const Platform = {
     if (this.ready) this.call(() => on ? this.sdk.game.gameplayStart() : this.sdk.game.gameplayStop());
   },
   happytime() { if (this.ready) this.call(() => this.sdk.game.happytime()); },
-  hasRewarded() { return this.ready; },
+  hasRewarded() { return this.isCrazy(); },
+  errText(e) {
+    if (!e) return 'desconhecido';
+    if (typeof e === 'string') return e;
+    return [e.code, e.message, e.error].filter(Boolean).join(' · ') || this.call(() => JSON.stringify(e)) || String(e);
+  },
   // durante o anúncio: jogo parado (estamos em menus) e áudio mudo
   muteForAd(on) {
     this.adActive = on;
     if (Audio.master && Audio.ctx) Audio.master.gain.setTargetAtTime(on || Audio.muted ? 0 : CONFIG.audio.master, Audio.ctx.currentTime, 0.02);
   },
   requestAd(type, onDone, onReward) {
-    if (!this.ready || this.adActive) { onDone(false); return; }
+    if (!this.ready) { this.status = 'anúncio ' + type + ' não pedido: SDK não está pronto'; onDone(false); return; }
+    if (this.adActive) { onDone(false); return; }
     let finished = false;
-    const end = (ok) => { if (finished) return; finished = true; this.muteForAd(false); Input.clear(); if (ok && onReward) onReward(); onDone(ok); };
+    this.status = 'pedindo anúncio ' + type + '...';
+    const end = (ok, why) => {
+      if (finished) return; finished = true;
+      this.status = ok ? 'anúncio ' + type + ' concluído' : 'anúncio ' + type + ' não exibido: ' + why;
+      this.muteForAd(false); Input.clear(); if (ok && onReward) onReward(); onDone(ok, why);
+    };
     try {
       this.sdk.ad.requestAd(type, {
-        adStarted: () => this.muteForAd(true),
+        adStarted: () => { this.status = 'anúncio ' + type + ' passando'; this.muteForAd(true); },
         adFinished: () => end(true),
-        adError: () => end(false)
+        adError: (err) => end(false, this.errText(err))
       });
-    } catch (e) { end(false); }
+    } catch (e) { end(false, 'exceção: ' + this.errText(e)); }
   },
   midgame(cb) { this.requestAd('midgame', () => cb()); },
-  rewarded(onReward, onFail) { this.requestAd('rewarded', ok => { if (!ok && onFail) onFail(); }, onReward); }
+  rewarded(onReward, onFail) { this.requestAd('rewarded', (ok, why) => { if (!ok && onFail) onFail(why); }, onReward); },
+  drawDebug() {
+    if (!this.isCrazy() || !this.debug) return;
+    ctx.save(); ctx.globalAlpha = 0.9;
+    ctx.font = '8px monospace'; ctx.textAlign = 'left';
+    const txt = 'SDK: ' + this.status;
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(4, 340, Math.min(View.viewW - 8, txt.length * 4.9 + 8), 13);
+    ctx.fillStyle = this.ready ? '#9dff6a' : '#ff9a9a'; ctx.fillText(txt, 8, 350);
+    ctx.restore();
+  }
 };
 
 /* ============================ Audio ============================ */
@@ -3974,7 +3999,7 @@ const UI = {
     else if (id === 'resume') Game.setPaused(false);
     else if (id === 'tomenu') Game.toMenu();
     else if (id === 'retry') Platform.midgame(() => Game.startRun(Game.phase));
-    else if (id === 'revive') Platform.rewarded(() => Game.revive(), () => Game.popup(Player.x, 200, 'ANÚNCIO INDISPONÍVEL', '#ff9a9a'));
+    else if (id === 'revive') Platform.rewarded(() => Game.revive(), () => Game.showBanner('ANÚNCIO INDISPONÍVEL', 'Tente de novo em instantes', '#ff9a9a'));
     else if (id === 'install') Platform.install();
     else if (id === 'next') { if (Game.phase < CONFIG.phasesAvailable) Platform.midgame(() => Game.nextPhase()); else if (Game.phase >= 3) { Audio.play('victory'); Game.goto('victory'); } else Game.goto('next'); }
   },
@@ -4019,6 +4044,10 @@ const UI = {
   fmtTime(s) { s = Math.floor(s); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); },
   drawOverlay(t) {
     const cx = View.viewW / 2, st = Game.state;
+    this.drawOverlayInner(t, cx, st);
+    if (Game.isOverlayMenu()) Platform.drawDebug();
+  },
+  drawOverlayInner(t, cx, st) {
     if (st === 'menu') {
       this.veil(0.55);
       const gl = Math.random() < 0.04 ? Util.rand(-3, 3) : 0;
