@@ -45,7 +45,7 @@ const BION_PLATFORM = 'crazygames';
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v1.2.1',
+  version: 'v1.2.2',
   phasesAvailable: 3,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
   render: { maxDpr: 2, maxBgRes: 3, reducedDpr: 1.25 },
@@ -2238,7 +2238,10 @@ const Boss = {
   reset() { this.active = false; this.dying = false; this.shells = []; this.waves = []; this.mines = []; Game.boss = null; },
   damage(d) {
     if (!this.active || this.dying || this.state === 'intro') return;
-    this.hp -= d; this.flash = 0.06;
+    this.hp -= d;
+    // piscar curto e espaçado: o chefe não fica todo branco sob tiro contínuo
+    const now = Game.time;
+    if (!this.lastFlash || now - this.lastFlash > 0.22) { this.flash = 0.045; this.lastFlash = now; }
     Audio.play('hit');
     if (this.hp <= 0) { this.hp = 0; this.die(); }
   },
