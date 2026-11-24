@@ -35,7 +35,7 @@
 
 <script>
 'use strict';
-// Plataforma do build: 'web' (GitHub Pages / PWA), 'crazygames' ou 'itch' (gerados pelos scripts em tools/)
+// Plataforma do build: 'web' (GitHub Pages / PWA), 'crazygames', 'gamedistribution' ou 'itch' (gerados pelos scripts em tools/)
 const BION_PLATFORM = 'itch';
 /* =====================================================================
    BION-07: PROTOCOLO VERDE
@@ -66,7 +66,7 @@ Fonts.load();
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v1.6.0',
+  version: 'v1.7.0',
   phasesAvailable: 3,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
   render: { maxDpr: 2, maxBgRes: 3, reducedDpr: 1.25 },
@@ -335,6 +335,8 @@ const Platform = {
   status: 'carregando', env: '?', debug: false,   // true: mostra o estado do SDK na tela (diagnóstico)
   adsDisabled: false,   // o portal recusou anúncios (ex.: fase Basic Launch): +1 VIDA fica grátis
   isCrazy() { return this.name === 'crazygames'; },
+  isGD() { return this.name === 'gamedistribution'; },
+  isPortal() { return this.isCrazy() || this.isGD(); },
   call(fn) { try { return fn(); } catch (e) { return undefined; } },
   async init() {
     if (this.isCrazy()) {
@@ -348,6 +350,15 @@ const Platform = {
         this.status = 'pronto · ambiente: ' + this.env;
       } catch (e) { this.ready = false; this.status = 'init falhou: ' + this.errText(e); }
       this.call(() => S.game.loadingStop());
+    } else if (this.isGD()) {
+      // GameDistribution: o SDK chama window.__gdEvent (ver GD_OPTIONS no build)
+      this.ready = true; this.status = 'GameDistribution';
+      window.__gdEvent = (ev) => {
+        const n = ev && ev.name;
+        if (n === 'SDK_GAME_PAUSE') { this.muteForAd(true); this.adActive = true; }
+        else if (n === 'SDK_GAME_START') { this.muteForAd(false); this.adActive = false; }
+        else if (n === 'SDK_REWARDED_WATCH_COMPLETE') this.rewardSeen = true;
+      };
     } else if (this.name === 'web') {
       // PWA: service worker (só funciona em http/https) e convite de instalação
       if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -378,7 +389,7 @@ const Platform = {
     if (this.ready) this.call(() => on ? this.sdk.game.gameplayStart() : this.sdk.game.gameplayStop());
   },
   happytime() { if (this.ready) this.call(() => this.sdk.game.happytime()); },
-  hasRewarded() { return this.isCrazy(); },
+  hasRewarded() { return this.isPortal(); },
   errText(e) {
     if (!e) return 'desconhecido';
     if (typeof e === 'string') return e;
@@ -390,6 +401,7 @@ const Platform = {
     if (Audio.master && Audio.ctx) Audio.master.gain.setTargetAtTime(on || Audio.muted ? 0 : CONFIG.audio.master, Audio.ctx.currentTime, 0.02);
   },
   requestAd(type, onDone, onReward) {
+    if (this.isGD()) { this.requestAdGD(type, onDone, onReward); return; }
     if (!this.ready) { this.status = 'anúncio ' + type + ' não pedido: SDK não está pronto'; onDone(false); return; }
     if (this.adActive) { onDone(false); return; }
     let finished = false;
@@ -406,6 +418,28 @@ const Platform = {
         adError: (err) => { const why = this.errText(err); if (/adsDisabled/i.test(why)) this.adsDisabled = true; end(false, why); }
       });
     } catch (e) { end(false, 'exceção: ' + this.errText(e)); }
+  },
+  requestAdGD(type, onDone, onReward) {
+    const sdk = window.gdsdk;
+    if (!sdk || typeof sdk.showAd !== 'function') {
+      // sem SDK (ex.: bloqueador de anúncios): não trava o jogo; o bônus é dado
+      this.status = 'GD: SDK indisponível'; if (type === 'rewarded' && onReward) onReward(); onDone(type === 'rewarded'); return;
+    }
+    let finished = false;
+    this.rewardSeen = false;
+    const end = (ok, why) => {
+      if (finished) return; finished = true;
+      this.muteForAd(false); this.adActive = false; Input.clear();
+      const rewarded = type === 'rewarded' ? (ok || this.rewardSeen) : ok;
+      if (rewarded && onReward) onReward();
+      onDone(rewarded, why);
+    };
+    try {
+      const kind = type === 'rewarded' ? ((sdk.AdType && sdk.AdType.Rewarded) || 'rewarded') : undefined;
+      const pr = kind ? sdk.showAd(kind) : sdk.showAd();
+      if (pr && typeof pr.then === 'function') pr.then(() => end(true)).catch(e => end(false, this.errText(e)));
+      else setTimeout(() => end(true), 300);
+    } catch (e) { end(false, this.errText(e)); }
   },
   midgame(cb) { this.requestAd('midgame', () => cb()); },
   rewarded(onReward, onFail) {
@@ -1123,7 +1157,7 @@ const Pools = {
     const arr = this.particles, n = arr.length;
     for (let k = 0; k < n; k++) {
       const i = (this.pCursor + k) % n;
-      if (!arr[i].on) { this.pCursor = i + 1; const p = arr[i]; p.grav = 0; p.drag = 0; p.add = true; p.size = 2; p.kind = 'dot'; p.rot = 0; Object.assign(p, props); p.max = p.life; p.on = true; return p; }
+      if (!arr[i].on) { this.pCursor = i + 1; const p = arr[i]; p.grav = 0; p.drag = 0; p.add = true; p.size = 2; p.kind = 'dot'; p.rot = 0; p.grow = 0; p.vr = 0; /* zera tudo ao reaproveitar */ Object.assign(p, props); p.max = p.life; p.on = true; return p; }
     }
     return null;
   },
@@ -4152,7 +4186,7 @@ const UI = {
       { name: 'mute', x: rightEdge - tb * 2 - 8, y: ty, w: tb, h: tb },
       { name: 'full', x: rightEdge - tb * 3 - 16, y: ty, w: tb, h: tb }
     ];
-    if (Platform.isCrazy()) this.top.pop();   // o portal já oferece tela cheia
+    if (Platform.isPortal()) this.top.pop();   // o portal já oferece tela cheia
     const lastTop = this.top[this.top.length - 1];
     this.top.push({ name: 'lang', x: lastTop.x - tb - 8, y: ty, w: tb, h: tb });   // troca PT / EN
   },
@@ -4606,8 +4640,8 @@ const UI = {
   },
   activate(id) {
     Audio.init(); Audio.play('ui');
-    if (id === 'play') Game.startRun(1);
-    else if (id === 'continue') Game.startRun(Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable));
+    if (id === 'play') { if (Platform.isGD()) Platform.midgame(() => Game.startRun(1)); else Game.startRun(1); }
+    else if (id === 'continue') { const ph = Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable); if (Platform.isGD()) Platform.midgame(() => Game.startRun(ph)); else Game.startRun(ph); }
     else if (id === 'difficulty') { Game.pendingPhase = 1; Game.goto('diff'); Game.menuSel = Math.max(0, ['recruta', 'veterano', 'sobrecarga'].indexOf(Game.diffKey)); }
     else if (id === 'howto') { Game.howtoPage = 0; Game.goto('howto'); }
     else if (id === 'shop') Game.goto('shop');
