@@ -1,6 +1,6 @@
 /* Service worker do BION-07: permite jogar offline e instalar como app.
    Troque CACHE a cada versão para os jogadores receberem a atualização. */
-const CACHE = 'bion07-v1.3.0';
+const CACHE = 'bion07-v1.4.0';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
