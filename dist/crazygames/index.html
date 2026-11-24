@@ -35,7 +35,7 @@
 <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
 <script>
 'use strict';
-// Plataforma do build: 'web' (GitHub Pages / PWA) ou 'crazygames' (gerado por tools/build-crazygames.py)
+// Plataforma do build: 'web' (GitHub Pages / PWA), 'crazygames' ou 'itch' (gerados pelos scripts em tools/)
 const BION_PLATFORM = 'crazygames';
 /* =====================================================================
    BION-07: PROTOCOLO VERDE
@@ -303,7 +303,7 @@ const Platform = {
         this.status = 'pronto · ambiente: ' + this.env;
       } catch (e) { this.ready = false; this.status = 'init falhou: ' + this.errText(e); }
       this.call(() => S.game.loadingStop());
-    } else {
+    } else if (this.name === 'web') {
       // PWA: service worker (só funciona em http/https) e convite de instalação
       if ('serviceWorker' in navigator && /^https?:/.test(location.protocol)) navigator.serviceWorker.register('sw.js').catch(() => {});
       window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); this.installPrompt = e; });
