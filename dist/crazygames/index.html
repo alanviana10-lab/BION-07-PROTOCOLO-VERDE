@@ -66,7 +66,7 @@ Fonts.load();
 
 /* ===================== CONFIG (balanceamento) ===================== */
 const CONFIG = {
-  version: 'v1.5.0',
+  version: 'v1.6.0',
   phasesAvailable: 3,   // fases já implementadas
   world: { height: 360, minW: 480, maxW: 800, portraitW: 480, gravity: 1500, maxFall: 720, groundY: 300 },
   render: { maxDpr: 2, maxBgRes: 3, reducedDpr: 1.25 },
@@ -170,7 +170,7 @@ const Save = {
   KEY: 'bion07_protocolo_verde_v1',
   data: null,
   defaults() {
-    return { versao: 1, perfil: { id: 'local', nome: 'Jogador' }, recordes: { recruta: 0, veterano: 0, sobrecarga: 0 }, progresso: { faseDesbloqueada: 1 }, config: { mudo: false, musica: true, efeitosReduzidos: false, idioma: 'auto', dificuldade: 'veterano', dicas: true, dicasVistas: [] } };
+    return { versao: 1, perfil: { id: 'local', nome: 'Jogador' }, recordes: { recruta: 0, veterano: 0, sobrecarga: 0 }, progresso: { faseDesbloqueada: 1, chips: 0 }, upgrades: { armor: 0, pulse: 0, bombs: 0, dash: 0, ammo: 0 }, armas: { spread: false, flame: false, laser: false }, config: { mudo: false, musica: true, efeitosReduzidos: false, idioma: 'auto', dificuldade: 'veterano', dicas: true, dicasVistas: [], armaInicial: 'pulse' } };
   },
   load() {
     this.data = this.defaults();
@@ -183,6 +183,8 @@ const Save = {
           Object.assign(this.data.recordes, d.recordes || {});
           Object.assign(this.data.progresso, d.progresso || {});
           Object.assign(this.data.config, d.config || {});
+          Object.assign(this.data.upgrades, d.upgrades || {});
+          Object.assign(this.data.armas, d.armas || {});
         }
       }
     } catch (e) { /* sem storage: segue sem salvar */ }
@@ -266,7 +268,15 @@ const I18N = {
     '+1 VIDA': '+1 LIFE', 'Obrigado pelo apoio!': 'Thanks for your support!', 'ARMA ESPECIAL': 'SPECIAL WEAPON', 'MUNIÇÃO': 'AMMO', ' RECARREGADA': ' RELOADED',
     'BOMBAS +': 'BOMBS +', 'REPARO +': 'REPAIR +', 'BLINDAGEM +': 'ARMOR +', 'MUNIÇÃO ESGOTADA': 'OUT OF AMMO', '-1 VIDA': '-1 LIFE',
     'REFORÇOS!': 'REINFORCEMENTS!', 'ANÚNCIO INDISPONÍVEL': 'AD UNAVAILABLE', 'VIDA': 'HEALTH', 'INIMIGOS': 'ENEMIES', 'CADÊNCIA': 'FIRE RATE', 'RECORDE ': 'BEST ',
-    'EFEITOS REDUZIDOS': 'REDUCED EFFECTS', 'DICAS NA TELA': 'ON-SCREEN TIPS', 'Escolha e volte ao menu · vale para todos os setores': 'Pick one and return · applies to every sector',
+    'EFEITOS REDUZIDOS': 'REDUCED EFFECTS', 'OFICINA': 'WORKSHOP', 'NOVO!': 'NEW!', 'MELHORIAS': 'UPGRADES', 'ARMAS INICIAIS': 'STARTING WEAPONS',
+    '+1 de vida máxima por nível': '+1 max health per level', '+25% de dano por nível': '+25% damage per level', 'BOMBAS EXTRAS': 'EXTRA BOMBS',
+    '+2 bombas iniciais por nível': '+2 starting bombs per level', 'DASH RÁPIDO': 'QUICK DASH', '-0,2 s de recarga por nível': '-0.2 s cooldown per level',
+    'MUNIÇÃO EXTRA': 'EXTRA AMMO', '+25% de munição especial por nível': '+25% special ammo per level', 'SPREAD INICIAL': 'STARTING SPREAD',
+    'FLAME INICIAL': 'STARTING FLAME', 'LASER INICIAL': 'STARTING LASER', 'Comece cada setor com esta arma': 'Start every sector with this weapon',
+    'EQUIPADA': 'EQUIPPED', 'EQUIPAR': 'EQUIP', 'MÁX': 'MAX', 'CHIPS INSUFICIENTES': 'NOT ENOUGH CHIPS', 'COMPRADO!': 'PURCHASED!',
+    'CHIPS GANHOS': 'CHIPS EARNED', 'Chips guardados: +': 'Chips saved: +', ' · gaste na OFICINA': ' · spend them in the WORKSHOP',
+    'Colete chips dos inimigos e compre melhorias': 'Collect chips from enemies and buy upgrades', 'CHIPS DE DADOS': 'DATA CHIPS',
+    'Colete para comprar melhorias na OFICINA': 'Collect them to buy upgrades in the WORKSHOP', 'DICAS NA TELA': 'ON-SCREEN TIPS', 'Escolha e volte ao menu · vale para todos os setores': 'Pick one and return · applies to every sector',
     'MIRA': 'AIM', 'FACA DE PLASMA': 'PLASMA KNIFE', 'CÁPSULAS': 'CAPSULES', 'AGACHAR': 'CROUCH', 'DRONES': 'DRONES',
     'Use o direcional e segure TIRO': 'Use the D-pad and hold FIRE', 'A/D para andar · segure J para atirar': 'A/D to move · hold J to fire',
     'Direcional para cima mira para cima e na diagonal': 'Push the D-pad up to aim up and diagonally', 'Segure W para mirar para cima e na diagonal': 'Hold W to aim up and diagonally',
@@ -469,7 +479,7 @@ const Audio = {
   play(name) {
     if (!this.ctx) return;
     const now = performance.now();
-    const minGap = { mg: 70, step: 120, metal: 60, shoot: 45, eshot: 60, hit: 35, step: 90, flame: 70, spread: 60, laser: 60, bounce: 50 }[name] || 0;
+    const minGap = { chip: 40, mg: 70, step: 120, metal: 60, shoot: 45, eshot: 60, hit: 35, step: 90, flame: 70, spread: 60, laser: 60, bounce: 50 }[name] || 0;
     if (minGap && this.last[name] && now - this.last[name] < minGap) return;
     this.last[name] = now;
     switch (name) {
@@ -508,6 +518,8 @@ const Audio = {
       case 'missile': this.noise(0.4, 0.12, 'bandpass', 900, 2800); this.tone('sawtooth', 200, 500, 0.25, 0.04); break;
       case 'mechOn': this.tone('sawtooth', 110, 330, 0.3, 0.07); this.tone('square', 660, 990, 0.15, 0.06, 0.3); break;
       case 'mechOff': this.tone('sawtooth', 330, 110, 0.25, 0.06); break;
+      case 'chip': this.tone('sine', 1300 + Math.random() * 200, 1900, 0.06, 0.035); break;
+      case 'buy': this.tone('square', 523, 523, 0.08, 0.07); this.tone('square', 784, 784, 0.08, 0.07, 0.08); this.tone('triangle', 1047, 1300, 0.2, 0.08, 0.16); break;
       case 'death': this.tone('sawtooth', 500, 40, 0.9, 0.12); this.noise(0.8, 0.25, 'lowpass', 3000, 60); break;
     }
   }
@@ -1213,11 +1225,14 @@ const Player = {
     const C = CONFIG.player;
     Object.assign(this, {
       x, y, vx: 0, vy: 0, w: C.w, h: C.h, facing: 1, onGround: false, groundType: null,
-      maxHp: Game.diff.hp, hp: Game.diff.hp, invuln: 0, dashT: 0, dashInv: 0, dashCd: 0, dashDir: 1, dashAir: false,
+      maxHp: Game.diff.hp + Upgrades.lvl('armor'), hp: Game.diff.hp + Upgrades.lvl('armor'), invuln: 0, dashT: 0, dashInv: 0, dashCd: 0, dashDir: 1, dashAir: false,
       coyote: 0, jumpBuf: 0, jumpCutDone: true, crouch: false, aimA: 0, fireCd: 0, muzzle: 0,
-      runPhase: 0, drop: 0, ghostT: 0, dead: false, weapon: 'pulse', ammo: Infinity,
-      bombs: Game.diff.startBombs || CONFIG.bombs.start, bombCd: 0, knifeCd: 0, knifeT: 0, mech: null, enterCd: 0, safe: null, groundRef: null
+      runPhase: 0, drop: 0, ghostT: 0, dead: false, weapon: 'pulse', ammo: Infinity, ammoMax: Infinity,
+      bombs: (Game.diff.startBombs || CONFIG.bombs.start) + 2 * Upgrades.lvl('bombs'), bombCd: 0, knifeCd: 0, knifeT: 0, mech: null, enterCd: 0, safe: null, groundRef: null
     });
+    // arma inicial comprada na Oficina
+    const sw = Upgrades.startWeapon();
+    if (sw !== 'pulse') this.setWeapon(sw);
   },
   hurt(dmg, srcX) {
     if (this.dead || this.invuln > 0 || this.dashInv > 0) return false;
@@ -1254,7 +1269,7 @@ const Player = {
     if (P.dash && this.dashCd <= 0 && this.dashT <= 0) {
       this.dashDir = I.left ? -1 : (I.right ? 1 : this.facing);
       this.facing = this.dashDir;
-      this.dashT = C.dashTime; this.dashInv = C.dashInvuln; this.dashCd = C.dashCooldown;
+      this.dashT = C.dashTime; this.dashInv = C.dashInvuln; this.dashCd = Upgrades.dashCd();
       this.dashAir = !this.onGround;
       this.vy = this.dashAir ? 0 : this.vy;
       Audio.play('dash');
@@ -1426,7 +1441,7 @@ const Player = {
     if (P.dash && this.dashCd <= 0 && this.dashT <= 0) {
       this.dashDir = I.left ? -1 : (I.right ? 1 : this.facing);
       this.facing = this.dashDir;
-      this.dashT = C.chargeTime; this.dashInv = C.chargeTime; this.dashCd = CONFIG.player.dashCooldown;
+      this.dashT = C.chargeTime; this.dashInv = C.chargeTime; this.dashCd = Upgrades.dashCd();
       m.hitList = [];
       Audio.play('dash'); Game.addShake(3, 0.15);
     }
@@ -1552,7 +1567,8 @@ const Player = {
   },
   setWeapon(w) {
     this.weapon = w;
-    this.ammo = CONFIG.weapons[w].ammo;
+    this.ammo = CONFIG.weapons[w].ammo === Infinity ? Infinity : Math.round(CONFIG.weapons[w].ammo * Upgrades.ammoMul());
+    this.ammoMax = this.ammo;
   },
   // alvos ao alcance da faca (inimigos, cápsulas, caixas)
   knifeTargets(apply) {
@@ -1600,7 +1616,7 @@ const Player = {
     const mx = s.x + dx * 18, my = s.y + dy * 18;
     if (wn === 'pulse') {
       [dx, dy] = dirOf(this.aimA + Util.rand(-W.jitter, W.jitter));
-      Pools.bullet({ x: mx, y: my, vx: dx * W.speed, vy: dy * W.speed, life: W.life, owner: 'p', kind: 'pulse', dmg: W.dmg, r: 3, pierce: false });
+      Pools.bullet({ x: mx, y: my, vx: dx * W.speed, vy: dy * W.speed, life: W.life, owner: 'p', kind: 'pulse', dmg: W.dmg * Upgrades.pulseMul(), r: 3, pierce: false });
       Pools.particle({ x: mx, y: my, vx: 0, vy: 0, life: 0.06, color: '#bffcff', size: 7, kind: 'flash' });
       if (Math.random() < 0.5) FX.sparks(mx, my, 2, '#3ff6ff', 90, dx * 80, dy * 80);
       Audio.play('shoot');
@@ -1789,6 +1805,7 @@ const Enemies = {
     e.dead = true;
     const c = CONFIG.enemies[e.type];
     FX.explosion(e.x, e.y - e.h / 2, 1);
+    Chips.spawn(e.x, e.y - e.h / 2, { soldier: 3, runner: 3, drone: 4, turret: 5 }[e.type] || 2);
     FX.debris(e.x, e.y - e.h / 2, { soldier: ['#4a4f63', '#2b2e3d', '#5c6278', '#d23cff'], runner: ['#6b2a3a', '#3a1420', '#843347', '#ff7a1a'], drone: ['#2a3448', '#34486a', '#ff8a2a'], turret: ['#2b2e3d', '#4a4f63', '#ff4dd2'] }[e.type] || ['#555'], 9);
     Game.addShake(4, 0.15);
     Game.hitStop = Math.max(Game.hitStop, CONFIG.fx.hitStop);
@@ -2163,6 +2180,7 @@ const Props = {
       Audio.play('crate');
       for (let i = 0; i < 10; i++) Pools.particle({ x: pr.x + Util.rand(-10, 10), y: pr.y - Util.rand(4, 20), vx: Util.rand(-120, 120), vy: Util.rand(-220, -60), life: 0.6, color: '#7a8a9a', size: 2.5, kind: 'dot', add: false, grav: 600 });
       FX.sparks(pr.x, pr.y - 11, 6, '#ffe27a', 160);
+      Chips.spawn(pr.x, pr.y - 12, 5);
       const drop = pr.item || ['bombs', 'repair', 'ammo'][Math.floor(Math.random() * 3)];
       Items.spawn(drop, pr.x, pr.y - 12);
       pr.removeT = 0;
@@ -2171,6 +2189,7 @@ const Props = {
       for (let i = 0; i < 16; i++) Pools.particle({ x: pr.x + Util.rand(-10, 10), y: pr.y - Util.rand(6, 32), vx: Util.rand(-150, 150), vy: Util.rand(-220, -40), life: 0.7, color: '#aaffff', size: 1.8, kind: 'spark', grav: 700, drag: 1 });
       Pools.particle({ x: pr.x, y: pr.y - 18, vx: 0, vy: 0, life: 0.4, color: '#3ff6ff', size: 6, kind: 'ring', grow: 80 });
       Game.stats.allies++;
+      Chips.spawn(pr.x, pr.y - 20, 5);
       Allies.spawn(pr.x, pr.y, pr.item || ['spread', 'laser', 'flame'][Math.floor(Math.random() * 3)]);
       pr.broken = true;
     }
@@ -2290,7 +2309,7 @@ const Items = {
       P.setWeapon(it.type); text = CONFIG.weapons[it.type].name + '!'; sub = 'ARMA ESPECIAL'; Audio.play('weapon');
     } else if (it.type === 'ammo') {
       if (P.weapon === 'pulse') { const w = ['spread', 'laser', 'flame'][Math.floor(Math.random() * 3)]; P.setWeapon(w); text = CONFIG.weapons[w].name + '!'; sub = 'ARMA ESPECIAL'; color = CONFIG.weapons[w].color; Audio.play('weapon'); }
-      else { P.ammo = CONFIG.weapons[P.weapon].ammo; text = 'MUNIÇÃO'; sub = CONFIG.weapons[P.weapon].name + ' RECARREGADA'; Audio.play('pickup'); }
+      else { P.ammo = P.ammoMax || CONFIG.weapons[P.weapon].ammo; text = 'MUNIÇÃO'; sub = CONFIG.weapons[P.weapon].name + ' RECARREGADA'; Audio.play('pickup'); }
     } else if (it.type === 'bombs') {
       P.bombs = Math.min(CONFIG.bombs.max, P.bombs + C.bombs); text = 'BOMBAS +' + C.bombs; Audio.play('pickup');
     } else if (it.type === 'repair') {
@@ -3612,6 +3631,98 @@ const Level = {
   }
 };
 
+/* ============================ Progressão: melhorias e armas da Oficina ============================ */
+const Upgrades = {
+  defs: [
+    { id: 'armor', name: 'BLINDAGEM', desc: '+1 de vida máxima por nível', costs: [200, 400, 800], color: '#55ff9a' },
+    { id: 'pulse', name: 'CANHÃO DE PULSO', desc: '+25% de dano por nível', costs: [150, 300, 600], color: '#3ff6ff' },
+    { id: 'bombs', name: 'BOMBAS EXTRAS', desc: '+2 bombas iniciais por nível', costs: [100, 200, 400], color: '#ffb02e' },
+    { id: 'dash', name: 'DASH RÁPIDO', desc: '-0,2 s de recarga por nível', costs: [120, 240, 480], color: '#9ff8ff' },
+    { id: 'ammo', name: 'MUNIÇÃO EXTRA', desc: '+25% de munição especial por nível', costs: [150, 300], color: '#ff9af0' }
+  ],
+  weapons: [
+    { id: 'spread', name: 'SPREAD INICIAL', cost: 350 },
+    { id: 'flame', name: 'FLAME INICIAL', cost: 450 },
+    { id: 'laser', name: 'LASER INICIAL', cost: 600 }
+  ],
+  lvl(id) { return (Save.data.upgrades && Save.data.upgrades[id]) || 0; },
+  chips() { return Save.data.progresso.chips || 0; },
+  unlocked(w) { return !!(Save.data.armas && Save.data.armas[w]); },
+  startWeapon() { const w = Save.data.config.armaInicial; return w && this.unlocked(w) ? w : 'pulse'; },
+  dashCd() { return Math.max(0.6, CONFIG.player.dashCooldown - 0.2 * this.lvl('dash')); },
+  ammoMul() { return 1 + 0.25 * this.lvl('ammo'); },
+  pulseMul() { return 1 + 0.25 * this.lvl('pulse'); },
+  nextCost(d) { const l = this.lvl(d.id); return l < d.costs.length ? d.costs[l] : null; },
+  // existe algo que dá para comprar agora? (destaque "NOVO!" no menu)
+  affordable() {
+    const c = this.chips();
+    return this.defs.some(d => { const n = this.nextCost(d); return n !== null && n <= c; }) || this.weapons.some(w => !this.unlocked(w.id) && w.cost <= c);
+  },
+  spend(n) { Save.data.progresso.chips = this.chips() - n; },
+  buyUpgrade(id) {
+    const d = this.defs.find(x => x.id === id), cost = d && this.nextCost(d);
+    if (cost === null || cost === undefined) return false;
+    if (cost > this.chips()) return 'poor';
+    this.spend(cost); Save.data.upgrades[id] = this.lvl(id) + 1; Save.write();
+    return true;
+  },
+  // arma: compra (se bloqueada) ou equipa/desequipa (se já comprada)
+  weaponAction(id) {
+    const w = this.weapons.find(x => x.id === id);
+    if (!this.unlocked(id)) {
+      if (w.cost > this.chips()) return 'poor';
+      this.spend(w.cost); Save.data.armas[id] = true; Save.data.config.armaInicial = id; Save.write();
+      return true;
+    }
+    Save.data.config.armaInicial = Save.data.config.armaInicial === id ? 'pulse' : id; Save.write();
+    return 'equip';
+  }
+};
+
+/* ============================ Chips de dados (moeda) ============================ */
+const Chips = {
+  list: [], magnet: 70,
+  spawn(x, y, n, home) {
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + Util.rand(-1.1, 1.1), sp = Util.rand(80, 210);
+      this.list.push({ x: x + Util.rand(-6, 6), y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, w: 6, h: 6, t: 0, life: 14, home: !!home, onGround: false, rot: Math.random() * 6 });
+    }
+  },
+  update(dt) {
+    const p = Player, px = p.x, py = p.y - p.h / 2;
+    for (const c of this.list) {
+      c.t += dt; c.life -= dt; c.rot += dt * 4;
+      const dx = px - c.x, dy = py - (c.y - 3), d = Math.hypot(dx, dy);
+      if (!p.dead && c.t > 0.35 && (d < this.magnet || (c.home && c.t > 0.9))) {
+        // ímã: voa até o KAI-4
+        const sp = 260 + (1 - Math.min(1, d / 200)) * 260;
+        c.vx = Util.lerp(c.vx, dx / (d || 1) * sp, Math.min(1, dt * 10));
+        c.vy = Util.lerp(c.vy, dy / (d || 1) * sp, Math.min(1, dt * 10));
+        c.x += c.vx * dt; c.y += c.vy * dt;
+        if (d < 12) { c.done = true; Game.addChips(1); }
+      } else {
+        if (c.onGround) c.vx *= Math.max(0, 1 - 6 * dt);
+        Physics.move(c, dt);
+        if (c.justLanded && Math.abs(c.vy) < 1) c.vy = 0;
+      }
+      if (c.life <= 0 || c.y > CONFIG.world.height + 40) c.done = true;
+    }
+    this.list = this.list.filter(c => !c.done && c.x > Game.camX - 60);
+  },
+  draw(t) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (const c of this.list) {
+      if (c.life < 3 && Math.floor(c.t * 10) % 2 === 0) continue;
+      ctx.fillStyle = 'rgba(85,255,200,0.25)'; ctx.beginPath(); ctx.arc(c.x, c.y - 3, 6, 0, 6.28); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    for (const c of this.list) {
+      if (c.life < 3 && Math.floor(c.t * 10) % 2 === 0) continue;
+      UI.chipIcon(c.x, c.y - 3, 3.4, c.rot);
+    }
+  }
+};
+
 /* ============================ Dicas rápidas (tutorial na tela) ============================ */
 // Aparecem uma vez por aparelho, quando o jogador chega no ponto da fase. Avisos de chefe sempre aparecem.
 const Hints = {
@@ -3624,6 +3735,7 @@ const Hints = {
         { id: 'move', x: 0, title: 'MOVA-SE E ATIRE', sub: T ? 'Use o direcional e segure TIRO' : 'A/D para andar · segure J para atirar' },
         { id: 'aim', x: 330, title: 'MIRA', sub: T ? 'Direcional para cima mira para cima e na diagonal' : 'Segure W para mirar para cima e na diagonal' },
         { id: 'jump', x: 470, title: 'PULO', sub: T ? 'Segure PULO para ir mais alto · BAIXO+PULO desce' : 'Segure K para ir mais alto · S+K desce da plataforma' },
+        { id: 'chips', x: 640, title: 'CHIPS DE DADOS', sub: 'Colete para comprar melhorias na OFICINA' },
         { id: 'knife', x: 760, title: 'FACA DE PLASMA', sub: 'Perto do inimigo, TIRO vira um corte elétrico' },
         { id: 'bomb', x: 900, title: 'BOMBA', sub: T ? 'BOMBA arremessa uma granada que quica e explode' : 'L arremessa uma bomba que quica e explode' },
         { id: 'capsule', x: 1060, title: 'CÁPSULAS', sub: 'Atire nas cápsulas para libertar aliados' },
@@ -3692,25 +3804,26 @@ const Game = {
   diffKey: CONFIG.defaultDifficulty, diff: CONFIG.difficulty[CONFIG.defaultDifficulty],
   levelTime: 0, phase: 1, pendingPhase: 1, cpIdx: 0, arena: false, bossDone: false, introT: 0, clearT: 0,
   menuSel: 0, newRecord: false, phaseStats: null, optionsFrom: 'menu', howtoPage: 0,
-  inMenu() { return this.state === 'menu' || this.state === 'diff' || this.state === 'howto' || (this.state === 'options' && this.optionsFrom === 'menu'); },
+  inMenu() { return this.state === 'menu' || this.state === 'diff' || this.state === 'howto' || this.state === 'shop' || (this.state === 'options' && this.optionsFrom === 'menu'); },
   isOverlayMenu() { return this.inMenu() || this.state === 'result' || this.state === 'next' || this.state === 'gameover' || this.state === 'victory' || this.state === 'options' || this.paused; },
   isPlaying() { return this.state === 'play' || this.state === 'dead' || this.state === 'clear'; },
   goto(state) { this.state = state; this.menuSel = 0; Input.clear(); this.fadeAt = this.time; },
-  toMenu() { this.paused = false; this.zoom = CONFIG.camera.zoom; View.worldW = View.viewW / this.zoom; Music.setPaused(false); Music.play('menu'); Boss.reset(); this.clearWorld(); Level.build(1); this.goto('menu'); },
+  toMenu() { Save.write(); this.paused = false; this.zoom = CONFIG.camera.zoom; View.worldW = View.viewW / this.zoom; Music.setPaused(false); Music.play('menu'); Boss.reset(); this.clearWorld(); Level.build(1); this.goto('menu'); },
   // passa para a próxima fase mantendo pontos, vidas, arma e bombas
   nextPhase() {
-    const keep = { weapon: Player.weapon, ammo: Player.ammo, bombs: Player.bombs };
+    const keep = { weapon: Player.weapon, ammo: Player.ammo, ammoMax: Player.ammoMax, bombs: Player.bombs };
     this.startPhase(this.phase + 1);
     Object.assign(Player, keep);
   },
   // nova partida a partir de uma fase (pontuação zera)
   startRun(phase) {
     this.diff = CONFIG.difficulty[this.diffKey];
-    this.score = 0; this.lives = CONFIG.extraLives; this.newRecord = false;
+    this.score = 0; this.lives = CONFIG.extraLives; this.newRecord = false; this.runChips = 0;
     this.stats = { kills: 0, allies: 0, maxCombo: 0, time: 0 };
     this.startPhase(phase);
   },
   clearWorld() {
+    Chips.list = [];
     Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = []; MechUnits.list = []; Missiles.list = [];
     Pools.clearBullets();
     for (const p of Pools.particles) p.on = false;
@@ -3723,7 +3836,7 @@ const Game = {
     this.clearWorld();
     this.cpIdx = 0; this.arena = false; this.bossDone = false;
     this.camX = 0; this.spawnIdx = 0; this.levelTime = 0; this.revivedPhase = false;
-    this.zoom = CONFIG.camera.zoom; View.worldW = View.viewW / this.zoom;
+    this.zoom = CONFIG.camera.zoom; View.worldW = View.viewW / this.zoom; this.phaseChips = 0;
     this.phaseStart = { kills: this.stats.kills, allies: this.stats.allies, time: this.stats.time }; this.phaseMaxCombo = 0;
     Player.reset(Level.checkpoints[0].x, CONFIG.world.groundY);
     this.paused = false; Music.setPaused(false);
@@ -3733,7 +3846,7 @@ const Game = {
   },
   respawnAtCheckpoint() {
     const cp = Level.checkpoints[this.cpIdx];
-    Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = []; MechUnits.list = []; Missiles.list = [];
+    Enemies.list = []; Props.list = []; Allies.list = []; Items.list = []; Bombs.list = []; MechUnits.list = []; Missiles.list = []; Chips.list = [];
     Pools.clearBullets(); Boss.reset(); Level.openGate();
     this.arena = false; this.combo = 0; this.comboT = 0;
     this.zoom = CONFIG.camera.zoom; View.worldW = View.viewW / this.zoom;
@@ -3758,6 +3871,7 @@ const Game = {
   },
   bossDefeated(x, y) {
     this.bossDone = true;
+    Chips.spawn(x, y + 30, 25, true);   // chuva de chips que voam até o jogador
     Music.stop();
     Platform.happytime();
     this.addScore(Boss.score, x, y);
@@ -3775,7 +3889,7 @@ const Game = {
   },
   finishPhase() {
     const ps = this.phaseStart || { kills: 0, allies: 0, time: 0 };
-    this.phaseStats = { score: this.score, kills: this.stats.kills - ps.kills, allies: this.stats.allies - ps.allies, maxCombo: this.phaseMaxCombo || 0, time: this.stats.time - ps.time };
+    this.phaseStats = { chips: this.phaseChips || 0, score: this.score, kills: this.stats.kills - ps.kills, allies: this.stats.allies - ps.allies, maxCombo: this.phaseMaxCombo || 0, time: this.stats.time - ps.time };
     Save.data.progresso.faseDesbloqueada = Math.min(3, Math.max(Save.data.progresso.faseDesbloqueada, this.phase + 1));
     this.newRecord = false;
     this.saveRecord();
@@ -3816,6 +3930,13 @@ const Game = {
     this.popup(x, y, '+' + pts + (m > 1 ? ' x' + m : ''), m > 1 ? '#ffb02e' : '#ffe27a');
     if (this.combo > 1) this.popup(x, y - 11, this.combo + ' COMBO', '#3ff6ff');
   },
+  addChips(n) {
+    const v = n * (this.diff.scoreMul || 1);
+    Save.data.progresso.chips = (Save.data.progresso.chips || 0) + v;
+    this.runChips = (this.runChips || 0) + v; this.phaseChips = (this.phaseChips || 0) + v;
+    this.chipPulse = 0.25;
+    Audio.play('chip');
+  },
   addScore(base, x, y) {
     const pts = base * this.diff.scoreMul;
     this.score += pts;
@@ -3841,6 +3962,7 @@ const Game = {
     if (this.paused === v) return;
     this.paused = v; this.menuSel = 0;
     Input.clear();
+    if (v) Save.write();
     Music.setPaused(v);
     if (!v) Audio.init();
   },
@@ -3930,6 +4052,8 @@ const Game = {
     Props.update(dt);
     Allies.update(dt);
     Items.update(dt);
+    Chips.update(dt);
+    if (this.chipPulse > 0) this.chipPulse -= dt;
     FX.update(dt);
     for (const p of this.popups) { p.t -= dt; p.y -= 30 * dt; }
     this.popups = this.popups.filter(p => p.t > 0);
@@ -3964,6 +4088,7 @@ const Game = {
     if (!menu) {
       Props.draw(t);
       Items.draw(t);
+      Chips.draw(t);
       Enemies.draw(t);
       Boss.draw(t);
       MechUnits.draw(t);
@@ -4121,7 +4246,7 @@ const UI = {
     if (W.ammo === Infinity) { ctx.fillStyle = '#9fe9ff'; ctx.fillText('∞', left + 92, top + 21); }
     else {
       ctx.fillStyle = '#152430'; ctx.fillRect(left + 50, top + 15, 40, 6);
-      ctx.fillStyle = wc; ctx.fillRect(left + 50, top + 15, 40 * (p.ammo / W.ammo), 6);
+      ctx.fillStyle = wc; ctx.fillRect(left + 50, top + 15, 40 * Math.min(1, p.ammo / (p.ammoMax || W.ammo)), 6);
       ctx.fillStyle = '#ffffff'; ctx.fillText(String(Math.ceil(p.ammo)), left + 94, top + 21);
     }
     // linha 3: bombas + dash
@@ -4133,7 +4258,7 @@ const UI = {
     const ready = p.dashCd <= 0;
     ctx.fillStyle = ready ? '#3ff6ff' : '#5b7480'; ctx.fillText('DASH', left + 40, top + 34);
     ctx.fillStyle = '#152430'; ctx.fillRect(left + 66, top + 28, 56, 6);
-    const k = 1 - p.dashCd / CONFIG.player.dashCooldown;
+    const k = 1 - p.dashCd / Upgrades.dashCd();
     ctx.fillStyle = ready ? '#3ff6ff' : '#2a7f8f'; ctx.fillRect(left + 66, top + 28, 56 * k, 6);
     if (ready) { ctx.fillStyle = '#bffcff'; ctx.fillText('OK', left + 126, top + 34); }
     }
@@ -4143,6 +4268,10 @@ const UI = {
     ctx.fillStyle = '#ffe27a';
     ctx.fillText(String(Game.score).padStart(7, '0'), cx, top + 12);
     ctx.font = '7px monospace'; ctx.fillStyle = '#c9b46a'; ctx.fillText('PONTOS', cx, top + 21);
+    { const pu = Game.chipPulse > 0 ? 1 + Game.chipPulse : 1;
+      this.chipIcon(cx + 50, top + 8, 4.5 * pu, 0);
+      ctx.textAlign = 'left'; ctx.font = Fonts.title(700, 10); ctx.fillStyle = '#9fffe0';
+      ctx.fillText(String(Upgrades.chips()), cx + 58, top + 12); ctx.textAlign = 'center'; }
     // combo
     if (Game.combo > 1 && Game.comboT > 0) {
       const m = Game.comboMult();
@@ -4242,9 +4371,13 @@ const UI = {
       ctx.beginPath(); ctx.moveTo(x + w - 13 - off, ay - 5); ctx.lineTo(x + w - 19 - off, ay); ctx.lineTo(x + w - 13 - off, ay + 5); ctx.fill();
     }
     ctx.textAlign = 'center';
-    ctx.font = this.tFont(r.label, 700, h < 28 ? 10.5 : 12);
     ctx.fillStyle = sel ? '#ffffff' : col;
-    ctx.fillText(r.label, x + w / 2, y + (r.sub ? 18 : h / 2 + 4.3));
+    if (r.label) this.fitText(r.label, x + w / 2, y + (r.sub ? 18 : h / 2 + 4.3), w - 26, s => this.tFont(r.label, 700, s), h < 28 ? 10.5 : 12);
+    if (r.badge) {
+      ctx.font = Fonts.title(900, 7.5); const bw = ctx.measureText(r.badge).width + 10;
+      ctx.fillStyle = '#ff4d6d'; Util.rr(ctx, x + w - bw - 6, y - 6, bw, 12, 4); ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.textAlign = 'center'; ctx.fillText(r.badge, x + w - bw / 2 - 6, y + 2.8);
+    }
     if (r.sub) { ctx.font = Fonts.ui(600, 9.5); ctx.fillStyle = sel ? '#d8f4ff' : '#9fb8c8'; ctx.fillText(r.sub, x + w / 2, y + 31); }
   },
   drawToggle(r, sel, t) {
@@ -4294,6 +4427,59 @@ const UI = {
     ctx.fillText('PONTOS x' + d.scoreMul, cx, y + h - 26);
     ctx.font = Fonts.ui(600, 9); ctx.fillStyle = '#8fa6b4';
     ctx.fillText('RECORDE ' + (Save.data.recordes[r.diff] || 0), cx, y + h - 12);
+  },
+  // ícone do chip de dados (hexágono)
+  chipIcon(x, y, r, rot = 0) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot * 0.3);
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3 + Math.PI / 6; i ? ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r) : ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r); }
+    ctx.closePath();
+    const g = ctx.createLinearGradient(0, -r, 0, r); g.addColorStop(0, '#c8fff0'); g.addColorStop(1, '#2bd9a0');
+    ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = '#06261c'; ctx.lineWidth = Math.max(0.8, r * 0.22); ctx.stroke();
+    ctx.fillStyle = '#0b4a37'; ctx.fillRect(-r * 0.35, -r * 0.35, r * 0.7, r * 0.7);
+    ctx.restore();
+  },
+  // texto que encolhe para caber na largura
+  fitText(text, x, y, maxW, fontFn, size, minSize = 6.5) {
+    let s = size; ctx.font = fontFn(s);
+    const w = ctx.measureText(text).width;
+    if (w > maxW) { s = Math.max(minSize, size * maxW / w); ctx.font = fontFn(s); }
+    ctx.fillText(text, x, y);
+  },
+  drawShopRow(r, sel, t) {
+    const fl = Game.shopFlash && Game.shopFlash.id === r.id && Game.shopFlash.t > 0 ? Game.shopFlash : null;
+    const shake = fl && !fl.ok ? Math.sin(fl.t * 70) * 3 : 0;
+    const rr = Object.assign({}, r, { x: r.x + shake, label: '', sub: '' });
+    this.drawButton(rr, sel, t);
+    const col = r.color, x = rr.x, y = r.y, w = r.w;
+    ctx.textAlign = 'left'; ctx.fillStyle = sel ? '#ffffff' : col;
+    this.fitText(r.label, x + 14, y + 15, w - 96, s => this.tFont(r.label, 700, s), 9.5);
+    ctx.fillStyle = '#a9c2d0';
+    this.fitText(r.desc, x + 14, y + 28, w - 92, s => Fonts.ui(600, s), 9);
+    // níveis
+    if (r.levels) for (let i = 0; i < r.levels; i++) {
+      const px = x + w - 14 - (r.levels - 1 - i) * 8;
+      ctx.beginPath(); ctx.arc(px, y + 12, 2.7, 0, 6.28);
+      if (i < r.lvl) { ctx.fillStyle = col; ctx.fill(); } else { ctx.strokeStyle = this.hexA(col, 0.6); ctx.lineWidth = 1; ctx.stroke(); }
+    }
+    // preço / estado
+    ctx.textAlign = 'right';
+    const ry = r.levels ? y + 28 : y + h2(r);
+    function h2(r) { return r.h / 2 + 4; }
+    if (r.status === 'max') { ctx.font = Fonts.title(700, 9); ctx.fillStyle = '#55ff9a'; ctx.fillText('MÁX', x + w - 10, ry); }
+    else if (r.status === 'equipped') { ctx.font = Fonts.title(700, 8.5); ctx.fillStyle = '#55ff9a'; ctx.fillText('EQUIPADA', x + w - 10, ry); }
+    else if (r.status === 'equip') { ctx.font = Fonts.title(700, 8.5); ctx.fillStyle = col; ctx.fillText('EQUIPAR', x + w - 10, ry); }
+    else {
+      const ok = r.cost <= Upgrades.chips();
+      ctx.font = Fonts.title(700, 9.5); ctx.fillStyle = ok ? '#ffe27a' : '#ff7a8a';
+      ctx.fillText(String(r.cost), x + w - 10, ry);
+      const tw = ctx.measureText(String(r.cost)).width;
+      this.chipIcon(x + w - 18 - tw, ry - 3.5, 4);
+    }
+    if (fl && fl.ok) {
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = fl.t / 0.4 * 0.5;
+      ctx.fillStyle = col; this.panelPath(x, y, w, r.h, 9); ctx.fill(); ctx.restore();
+    }
   },
   // KAI-4 grande na tela inicial (reaproveita o desenho do jogador)
   drawHero(t, x, y, s) {
@@ -4353,12 +4539,22 @@ const UI = {
       const dn = { recruta: 'RECRUTA', veterano: 'VETERANO', sobrecarga: 'SOBRECARGA' }[Game.diffKey] || 'VETERANO';
       const it = [{ id: 'play', label: 'JOGAR', sub: 'SETOR 1 · ' + dn, color: '#55ff9a' }];
       if (Save.data.progresso.faseDesbloqueada > 1) it.push({ id: 'continue', label: 'CONTINUAR', sub: 'SETOR ' + Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable) + ' · ' + dn });
-      it.push({ id: 'difficulty', label: 'DIFICULDADE', color: '#3ff6ff', h: 26 });
-      it.push({ id: 'howto', label: 'COMO JOGAR', color: '#c07bff', h: 26 });
-      it.push({ id: 'options', label: 'OPÇÕES', color: '#ffb02e', h: 26 });
-      if (Platform.canInstall()) it.push({ id: 'install', label: 'INSTALAR APP', color: '#55ff9a', h: 24 });
-      const tall = it.reduce((a, b) => a + (b.h || (b.sub ? 38 : 30)) + 8, 0);
-      return { y: Math.min(192, 352 - tall), items: it };
+      it.push({ id: 'shop', label: 'OFICINA', sub: Upgrades.chips() + ' CHIPS', color: '#ffe27a', badge: Upgrades.affordable() ? 'NOVO!' : '' });
+      it.push({ id: 'difficulty', label: 'DIFICULDADE', color: '#3ff6ff', row: true });
+      it.push({ id: 'howto', label: 'COMO JOGAR', color: '#c07bff', row: true });
+      it.push({ id: 'options', label: 'OPÇÕES', color: '#ffb02e', row: true });
+      if (Platform.canInstall()) it.push({ id: 'install', label: 'INSTALAR APP', color: '#55ff9a', row: true });
+      const stacked = it.filter(x => !x.row).length;
+      return { y: stacked > 2 ? 160 : 180, rowEnd: true, rowH: 26, items: it };
+    }
+    if (st === 'shop') {
+      const it = Upgrades.defs.map(d => { const l = Upgrades.lvl(d.id), c = Upgrades.nextCost(d); return { id: 'up_' + d.id, kind: 'shop', col: 0, label: d.name, desc: d.desc, color: d.color, levels: d.costs.length, lvl: l, cost: c, status: c === null ? 'max' : '' }; });
+      for (const w of Upgrades.weapons) {
+        const un = Upgrades.unlocked(w.id), eq = Upgrades.startWeapon() === w.id;
+        it.push({ id: 'wp_' + w.id, kind: 'shop', col: 1, label: w.name, desc: 'Comece cada setor com esta arma', color: CONFIG.weapons[w.id].color, cost: w.cost, status: un ? (eq ? 'equipped' : 'equip') : '' });
+      }
+      it.push({ id: 'back', label: 'VOLTAR', w: 160, h: 26 });
+      return { y: 86, grid: true, items: it };
     }
     if (st === 'diff') return { y: 94, rowH: 176, items: [
       { id: 'd_recruta', kind: 'card', row: true, diff: 'recruta', level: 1, label: 'RECRUTA', color: '#55ff9a' },
@@ -4384,20 +4580,28 @@ const UI = {
     const m = this.menuItems();
     if (!m) return [];
     let y = m.y; const out = [];
-    // itens em linha (cartões lado a lado)
+    // grade em duas colunas (oficina)
+    if (m.grid) {
+      const colW = Math.min(286, (View.viewW - 34) / 2), xs = [View.viewW / 2 - colW - 5, View.viewW / 2 + 5], ys = [y, y];
+      for (const it of m.items) if (it.col !== undefined) { out.push(Object.assign({}, it, { x: xs[it.col], y: ys[it.col], w: colW, h: 36 })); ys[it.col] += 42; }
+      y = Math.max(ys[0], ys[1]) + 2;
+    }
+    // itens em linha (cartões lado a lado / botões secundários)
     const row = m.items.filter(it => it.row);
-    if (row.length) {
-      const gap = 10, cw = Math.min(158, (View.viewW - 30 - gap * (row.length - 1)) / row.length);
+    const placeRow = () => {
+      const gap = 8, cw = Math.min(m.rowEnd ? 132 : 158, (View.viewW - 30 - gap * (row.length - 1)) / row.length);
       const total = cw * row.length + gap * (row.length - 1);
       row.forEach((it, i) => out.push(Object.assign({}, it, { x: View.viewW / 2 - total / 2 + i * (cw + gap), y, w: cw, h: m.rowH })));
       y += m.rowH + 12;
-    }
+    };
+    if (row.length && !m.rowEnd) placeRow();
     for (const it of m.items) {
-      if (it.row) continue;
+      if (it.row || it.col !== undefined) continue;
       const w = it.w || m.w || 200, h = it.h || (it.sub ? 38 : 30);
       out.push(Object.assign({}, it, { x: View.viewW / 2 - w / 2, y, w, h }));
       y += h + 8;
     }
+    if (row.length && m.rowEnd) { y += 2; placeRow(); }
     return out;
   },
   activate(id) {
@@ -4406,6 +4610,13 @@ const UI = {
     else if (id === 'continue') Game.startRun(Math.min(Save.data.progresso.faseDesbloqueada, CONFIG.phasesAvailable));
     else if (id === 'difficulty') { Game.pendingPhase = 1; Game.goto('diff'); Game.menuSel = Math.max(0, ['recruta', 'veterano', 'sobrecarga'].indexOf(Game.diffKey)); }
     else if (id === 'howto') { Game.howtoPage = 0; Game.goto('howto'); }
+    else if (id === 'shop') Game.goto('shop');
+    else if (id.startsWith('up_') || id.startsWith('wp_')) {
+      const res = id.startsWith('up_') ? Upgrades.buyUpgrade(id.slice(3)) : Upgrades.weaponAction(id.slice(3));
+      if (res === 'poor') { Game.shopFlash = { id, t: 0.4, ok: false }; Game.shopMsg = { text: 'CHIPS INSUFICIENTES', color: '#ff7a8a', t: 1.6 }; Audio.play('empty'); }
+      else if (res === true) { Game.shopFlash = { id, t: 0.4, ok: true }; Game.shopMsg = { text: 'COMPRADO!', color: '#55ff9a', t: 1.6 }; Audio.play('buy'); }
+      else if (res === 'equip') { Game.shopFlash = { id, t: 0.4, ok: true }; Audio.play('select'); }
+    }
     else if (id === 'howto_next') { Game.howtoPage = 1; }
     else if (id === 'howto_prev') { Game.howtoPage = 0; }
     else if (id === 'options') { Game.optionsFrom = Game.paused ? 'pause' : 'menu'; Game.optionsPrev = Game.state; Game.goto('options'); }
@@ -4437,13 +4648,14 @@ const UI = {
     if (code === 'ArrowUp' || code === 'KeyW' || code === 'ArrowLeft' || code === 'KeyA') { Game.menuSel = (Game.menuSel - 1 + rects.length) % rects.length; Audio.play('select'); }
     else if (code === 'ArrowDown' || code === 'KeyS' || code === 'ArrowRight' || code === 'KeyD') { Game.menuSel = (Game.menuSel + 1) % rects.length; Audio.play('select'); }
     else if (['Enter', 'Space', 'KeyJ', 'KeyZ', 'KeyK', 'KeyX'].includes(code)) { const r = rects[Math.min(Game.menuSel, rects.length - 1)]; this.activate(r.id); }
-    else if (code === 'Escape' && (Game.state === 'diff' || Game.state === 'howto')) this.activate('back');
+    else if (code === 'Escape' && (Game.state === 'diff' || Game.state === 'howto' || Game.state === 'shop')) this.activate('back');
     else if (code === 'Escape' && Game.state === 'options') this.activate('opt_back');
   },
   drawMenu(t) {
     this.menuRects().forEach((r, i) => {
       const sel = i === Game.menuSel;
       if (r.kind === 'card') this.drawCard(r, sel, t);
+      else if (r.kind === 'shop') this.drawShopRow(r, sel, t);
       else if (r.kind === 'toggle') this.drawToggle(r, sel, t);
       else this.drawButton(r, sel, t);
     });
@@ -4462,12 +4674,27 @@ const UI = {
       const vg = ctx.createLinearGradient(0, 0, 0, 360);
       vg.addColorStop(0, 'rgba(2,4,12,0.55)'); vg.addColorStop(0.5, 'rgba(2,4,12,0)'); vg.addColorStop(1, 'rgba(2,4,12,0.6)');
       ctx.fillStyle = vg; ctx.fillRect(0, 0, View.viewW, 360);
-      if (View.viewW >= 560) { this.drawHero(t, Math.max(70, cx - 215), Render.groundScreenY(), 2.6); }
+      if (View.viewW >= 620) { this.drawHero(t, Math.max(48, cx - 262), Render.groundScreenY(), 2.6); }
       this.drawLogo(t, cx, 86);
       ctx.font = Fonts.ui(600, 9.5); ctx.fillStyle = '#8fb0c0'; ctx.textAlign = 'center';
       const r = Save.data.recordes;
       ctx.fillText('RECORDES  Recruta ' + r.recruta + ' · Veterano ' + r.veterano + ' · Sobrecarga ' + r.sobrecarga, cx, 150);
       this.drawMenu(t); this.version();
+    } else if (st === 'shop') {
+      this.veil(0.8);
+      if (Game.shopFlash && Game.shopFlash.t > 0) Game.shopFlash.t -= 1 / 60;
+      this.neonText('OFICINA', cx, 40, 22, '#fff1a8', '#ffb02e');
+      const bal = String(Upgrades.chips());
+      ctx.font = Fonts.title(900, 14); const bw = ctx.measureText(bal).width;
+      this.chipIcon(cx - bw / 2 - 10, 58, 6, t);
+      ctx.textAlign = 'left'; ctx.fillStyle = '#9fffe0'; ctx.fillText(bal, cx - bw / 2 + 2, 63);
+      ctx.font = Fonts.ui(700, 9); ctx.fillStyle = '#8fb0c0'; ctx.textAlign = 'center';
+      const colW = Math.min(286, (View.viewW - 34) / 2);
+      ctx.fillText('MELHORIAS', cx - 5 - colW / 2, 80); ctx.fillText('ARMAS INICIAIS', cx + 5 + colW / 2, 80);
+      this.drawMenu(t);
+      const msg = Game.shopMsg;
+      if (msg && msg.t > 0) { msg.t -= 1 / 60; ctx.globalAlpha = Math.min(1, msg.t * 2); this.neonText(msg.text, cx, 346, 11, '#ffffff', msg.color, 700); ctx.globalAlpha = 1; }
+      else { ctx.font = Fonts.ui(600, 9); ctx.fillStyle = '#6f8a99'; ctx.textAlign = 'center'; ctx.fillText('Colete chips dos inimigos e compre melhorias', cx, 346); }
     } else if (st === 'diff') {
       this.veil(0.7);
       this.neonText('DIFICULDADE', cx, 54, 22, '#9ff8ff', '#3ff6ff');
@@ -4552,15 +4779,15 @@ const UI = {
       this.veil(0.78);
       this.neonText('SETOR ' + Game.phase + ' CONCLUÍDO', cx, 56, 22, '#e9fff3', '#55ff9a');
       const ps = Game.phaseStats;
-      const rows = [['PONTOS', String(ps.score)], ['INIMIGOS DESTRUÍDOS', String(ps.kills)], ['ALIADOS LIBERTADOS', String(ps.allies)], ['MAIOR COMBO', String(ps.maxCombo)], ['TEMPO', this.fmtTime(ps.time)]];
-      this.panel(cx - 150, 80, 300, 150, '#55ff9a');
+      const rows = [['PONTOS', String(ps.score)], ['INIMIGOS DESTRUÍDOS', String(ps.kills)], ['ALIADOS LIBERTADOS', String(ps.allies)], ['MAIOR COMBO', String(ps.maxCombo)], ['TEMPO', this.fmtTime(ps.time)], ['CHIPS GANHOS', '+' + (ps.chips || 0)]];
+      this.panel(cx - 150, 80, 300, 172, '#55ff9a');
       ctx.strokeStyle = 'rgba(85,255,154,0.5)'; ctx.stroke();
       rows.forEach(([k, v], i) => {
         const y = 108 + i * 25;
         ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = '#9fe9ff'; ctx.fillText(k, cx - 130, y);
         ctx.textAlign = 'right'; ctx.fillStyle = i === 0 ? '#ffe27a' : '#ffffff'; ctx.fillText(v, cx + 130, y);
       });
-      if (Game.newRecord && Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 262, 18, '#ffffff', '#ffb02e');
+      if (Game.newRecord && Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 280, 16, '#ffffff', '#ffb02e');
       this.drawMenu(t);
     } else if (st === 'victory') {
       this.veil(0.8);
@@ -4573,16 +4800,16 @@ const UI = {
       ctx.fillText('KAI-4 restaurou o Protocolo Verde da reserva.', cx, 109);
       this.neonText('PONTUAÇÃO FINAL  ' + Game.score, cx, 146, 18, '#fff4c8', '#ffb02e');
       const st2 = Game.stats;
-      this.panel(cx - 150, 162, 300, 92, '#55ff9a');
+      this.panel(cx - 150, 162, 300, 112, '#55ff9a');
       ctx.strokeStyle = 'rgba(85,255,154,0.5)'; ctx.stroke();
-      const rows = [['DIFICULDADE', Game.diffKey.toUpperCase()], ['INIMIGOS DESTRUÍDOS', String(st2.kills)], ['ALIADOS LIBERTADOS', String(st2.allies)], ['MAIOR COMBO / TEMPO', st2.maxCombo + '  /  ' + this.fmtTime(st2.time)]];
+      const rows = [['DIFICULDADE', Game.diffKey.toUpperCase()], ['INIMIGOS DESTRUÍDOS', String(st2.kills)], ['ALIADOS LIBERTADOS', String(st2.allies)], ['MAIOR COMBO / TEMPO', st2.maxCombo + '  /  ' + this.fmtTime(st2.time)], ['CHIPS GANHOS', '+' + (Game.runChips || 0)]];
       rows.forEach(([k, v], i) => {
         const y = 182 + i * 20;
         ctx.font = 'bold 9px monospace'; ctx.textAlign = 'left'; ctx.fillStyle = '#9fe9ff'; ctx.fillText(k, cx - 135, y);
         ctx.textAlign = 'right'; ctx.fillStyle = '#ffffff'; ctx.fillText(v, cx + 135, y);
       });
-      if (Game.newRecord) { if (Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 282, 16, '#ffffff', '#ffb02e'); }
-      else { ctx.font = '9px monospace'; ctx.fillStyle = '#88a8b8'; ctx.textAlign = 'center'; ctx.fillText('Recorde ' + Game.diffKey + ': ' + Save.data.recordes[Game.diffKey], cx, 282); }
+      if (Game.newRecord) { if (Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 292, 14, '#ffffff', '#ffb02e'); }
+      else { ctx.font = '9px monospace'; ctx.fillStyle = '#88a8b8'; ctx.textAlign = 'center'; ctx.fillText('Recorde ' + Game.diffKey + ': ' + Save.data.recordes[Game.diffKey], cx, 292); }
       this.drawMenu(t);
     } else if (st === 'next') {
       this.veil(0.85);
@@ -4600,6 +4827,7 @@ const UI = {
       ctx.fillText('PONTOS ' + Game.score, cx, 128);
       ctx.font = '9px monospace'; ctx.fillStyle = '#9fb8c8';
       ctx.fillText('Recorde ' + Game.diffKey + ': ' + Save.data.recordes[Game.diffKey], cx, 144);
+      if (Game.runChips > 0) { ctx.fillStyle = '#9fffe0'; ctx.fillText('Chips guardados: +' + Game.runChips + ' · gaste na OFICINA', cx, 158); }
       if (Game.newRecord && Math.floor(t * 3) % 2 === 0) this.neonText('NOVO RECORDE!', cx, 176, 16, '#ffffff', '#ffb02e');
       this.drawMenu(t);
     } else if (Game.paused) {
